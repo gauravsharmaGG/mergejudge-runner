@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createLogger, redact, tokenPrefix } from "../src/redact.js";
+import { createLogger, redact, redactedLogs, tokenPrefix } from "../src/redact.js";
 import { claudeArgs, engineEnv, parseClaudeEnvelope } from "../src/engine.js";
 import { defaultConfigPath, validateUrl } from "../src/config.js";
 import { parseRetryAfter } from "../src/api.js";
@@ -23,6 +23,35 @@ describe("redact", () => {
   });
   it("tokenPrefix shows only the start", () => {
     expect(tokenPrefix(`mjr_a_${"z".repeat(43)}`)).toBe("mjr_a_zzzz…");
+  });
+  it("masks emails, auth headers, long base64 and long hex", () => {
+    expect(redact("ping ada@example.com now")).toBe("ping [redacted] now");
+    const header = redact("x-api-key: supersecretvalue and authorization: Bearer abcdefghijklmnop");
+    expect(header).not.toContain("supersecretvalue");
+    expect(header).not.toContain("abcdefghijklmnop");
+    expect(redact(`hex ${"ab".repeat(20)} end`)).toBe("hex [redacted] end");
+    expect(redact("sha abcdef1")).toBe("sha abcdef1");
+    const b64 = Buffer.from("x".repeat(40)).toString("base64");
+    expect(redact(`blob ${b64} end`)).not.toContain(b64);
+    const pem = `-----BEGIN PRIVATE KEY-----\n${"A".repeat(64)}\n-----END PRIVATE KEY-----`;
+    expect(redact(`key ${pem} done`)).not.toContain("AAAA");
+    expect(redact(`key ${pem} done`)).toContain("done");
+  });
+  it("drops prompts, diffs and model output instead of printing a slice", () => {
+    const secret = "CUSTOMER_FN_pay_amount";
+    expect(redact(`diff --git a/a.ts b/a.ts\n+${secret}`)).toBe("[redacted]");
+    expect(redact(`@@ -1,2 +1,2 @@\n+${secret}`)).toBe("[redacted]");
+    expect(redact(`<untrusted_pr_data>${secret}</untrusted_pr_data>`)).toBe("[redacted]");
+    expect(redact(`{"summary":"${secret}","files":[{"lane":"review"}]}`)).toBe("[redacted]");
+    expect(redact("x".repeat(4001))).toBe("[redacted]");
+  });
+  it("redactedLogs is the Action logging path", () => {
+    const lines: string[] = [];
+    const log = redactedLogs({ info: (m) => lines.push(`I ${m}`), warning: (m) => lines.push(`W ${m}`) }, ["ghp_exampletokenvalue"]);
+    log.info("token ghp_exampletokenvalue email a@b.co");
+    log.warning(`diff --git a/a.ts b/a.ts\n+code`);
+    expect(lines[0]).toBe("I token [redacted] email [redacted]");
+    expect(lines[1]).toBe("W [redacted]");
   });
 });
 

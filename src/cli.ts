@@ -9,7 +9,7 @@ import { buildEngineSettings, glmKeyOf, GLM_KEY_ENV, pickDefaultEngine, runnerCa
 import { CODEX_EFFORTS, isCodexEffort } from "./engine.js";
 import { ConfigError, defaultConfigPath, loadConfig, saveConfig, validateUrl, type EngineSettings, type RunnerConfig } from "./config.js";
 import { detectClis, engineLine, engineLines, glmReport, NO_ENGINE_MESSAGE, readyEngines, unlistedEngineNotes, type EngineReport } from "./detect.js";
-import { createLogger, tokenPrefix, type Logger } from "./redact.js";
+import { createLogger, redact, tokenPrefix, type Logger } from "./redact.js";
 import { deviceLogin } from "./login.js";
 import { resolveLocalCode } from "./localcode.js";
 import { runLoop } from "./run.js";
@@ -96,7 +96,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     err(`unknown command: ${cmd}\n${USAGE}`);
     return 2;
   } catch (e) {
-    err(`error: ${(e as Error).message}`);
+    err(redact(`error: ${(e as Error).message}`));
     return e instanceof ConfigError || (e as { code?: string }).code?.startsWith("ERR_PARSE_ARGS") ? 2 : 1;
   }
 }
@@ -382,7 +382,7 @@ async function setup(v: Vals, positionals: string[], configPath: string, deps: C
   } else if (!v["no-autostart"]) {
     const yes = v.yes === true || /^(|y|yes)$/i.test((await ask(deps, `Start the runner automatically at login (${plat === "darwin" ? "launchd" : "systemd user service"})? [Y/n] `)).trim());
     if (yes) {
-      try { for (const n of installAutostart(deps2, deps.bundlePath ?? fileURLToPath(import.meta.url))) out(n); } catch (e) { err(`warning: ${(e as Error).message}`); }
+      try { for (const n of installAutostart(deps2, deps.bundlePath ?? fileURLToPath(import.meta.url))) out(n); } catch (e) { err(redact(`warning: ${(e as Error).message}`)); }
     } else out("Skipping auto-start. Start the runner with: npx mergejudge-runner run");
   } else out("Skipping auto-start. Start the runner with: npx mergejudge-runner run");
 
@@ -449,12 +449,12 @@ async function status(configPath: string, deps: CliDeps, out: (l: string) => voi
     out(`heartbeat:  rejected (HTTP ${r.status}: ${errorCode(r)})${r.status === 401 ? " - token revoked or expired; register again" : ""}`);
     return 1;
   } catch (e) {
-    out(`reachable:  no (${(e as Error).message})`);
+    out(redact(`reachable:  no (${(e as Error).message})`));
     return 1;
   }
 }
 
 // Run as a program (not when imported by tests).
 if (process.argv[1] && fileURLToPath(import.meta.url) === realpathSync(process.argv[1])) {
-  main(process.argv.slice(2)).then((c) => process.exit(c), (e) => { console.error(`error: ${(e as Error).message}`); process.exit(1); });
+  main(process.argv.slice(2)).then((c) => process.exit(c), (e) => { console.error(redact(`error: ${(e as Error).message}`)); process.exit(1); });
 }

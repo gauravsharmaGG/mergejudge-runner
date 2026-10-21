@@ -1,4 +1,5 @@
-import { isTruncated, postJson, reportUsage, tokenCount, type UsageSink, type LlmUsage, type ChatMessage, type ChatRequest, type ChatTurn, type LlmProvider, type LlmRequest, type LlmResult } from "./provider.js";
+import { LlmError, postJson, type LlmTransport } from "./http.js";
+import { isTruncated, reportUsage, tokenCount, type UsageSink, type LlmUsage, type ChatMessage, type ChatRequest, type ChatTurn, type LlmProvider, type LlmRequest, type LlmResult } from "./provider.js";
 
 type Block = Record<string, unknown>;
 
@@ -32,15 +33,19 @@ export function anthropicUsage(u: AnthropicUsage | undefined): LlmUsage | null {
 
 export class AnthropicProvider implements LlmProvider {
   readonly label: string;
+  readonly providerId: string;
   readonly supportsTools = true;
-  constructor(private baseUrl: string, private model: string, private apiKey: string, private onUsage?: UsageSink) {
+  constructor(private baseUrl: string, private model: string, private apiKey: string, private onUsage?: UsageSink, private transport: Partial<LlmTransport> = {}) {
     this.label = model;
+    this.providerId = transport.providerId ?? "anthropic";
   }
   private url() { return `${this.baseUrl.replace(/\/+$/, "")}/v1/messages`; }
   private headers() { return { "x-api-key": this.apiKey, "anthropic-version": "2023-06-01" }; }
+  private http(): Partial<LlmTransport> { return { ...this.transport, providerId: this.providerId }; }
+  private empty(): never { throw new LlmError("parse", { provider: this.providerId }); }
   async complete(req: LlmRequest): Promise<string> {
     const r = await this.completeEx(req);
-    if (!r.text) throw new Error("LLM response had no text content");
+    if (!r.text) this.empty();
     return r.text;
   }
   async completeEx(req: LlmRequest): Promise<LlmResult> {
@@ -53,6 +58,7 @@ export class AnthropicProvider implements LlmProvider {
         system: req.system,
         messages: [{ role: "user", content: req.user }],
       },
+      this.http(),
     )) as { content?: { type: string; text?: string }[]; usage?: AnthropicUsage; stop_reason?: unknown };
     reportUsage(this.onUsage, anthropicUsage(data.usage));
     const text = (data.content ?? [])
@@ -75,6 +81,7 @@ export class AnthropicProvider implements LlmProvider {
           ? { tools: req.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })) }
           : {}),
       },
+      this.http(),
     )) as {
       content?: { type: string; text?: string; id?: string; name?: string; input?: unknown }[];
       usage?: AnthropicUsage;
@@ -86,7 +93,7 @@ export class AnthropicProvider implements LlmProvider {
     const toolCalls = blocks.flatMap((b, i) => b.type === "tool_use" && b.name
       ? [{ id: b.id || `toolu_${i}`, name: b.name, args: b.input && typeof b.input === "object" ? (b.input as Record<string, unknown>) : {} }] : []);
     const truncated = isTruncated(data.stop_reason === "max_tokens", tokenCount(data.usage?.output_tokens), req.maxOutputTokens);
-    if (!text && !toolCalls.length && !truncated) throw new Error("LLM response had no text content");
+    if (!text && !toolCalls.length && !truncated) this.empty();
     return {
       text, toolCalls, ...(truncated ? { truncated } : {}),
       ...(data.usage ? { usage: { input: data.usage.input_tokens ?? 0, output: data.usage.output_tokens ?? 0 } } : {}),

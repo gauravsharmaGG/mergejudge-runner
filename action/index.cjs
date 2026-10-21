@@ -11949,7 +11949,7 @@ var require_headers = __commonJS({
       while (j > i && isHTTPWhiteSpaceCharCode(potentialValue.charCodeAt(i))) ++i;
       return i === 0 && j === potentialValue.length ? potentialValue : potentialValue.substring(i, j);
     }
-    function fill(headers, object2) {
+    function fill2(headers, object2) {
       if (Array.isArray(object2)) {
         for (let i = 0; i < object2.length; ++i) {
           const header = object2[i];
@@ -12174,7 +12174,7 @@ var require_headers = __commonJS({
         this.#guard = "none";
         if (init !== void 0) {
           init = webidl.converters.HeadersInit(init, "Headers contructor", "init");
-          fill(this, init);
+          fill2(this, init);
         }
       }
       // https://fetch.spec.whatwg.org/#dom-headers-append
@@ -12354,7 +12354,7 @@ var require_headers = __commonJS({
       });
     };
     module2.exports = {
-      fill,
+      fill: fill2,
       // for test.
       compareHeaderName,
       Headers: Headers2,
@@ -12371,7 +12371,7 @@ var require_headers = __commonJS({
 var require_response = __commonJS({
   "node_modules/undici/lib/web/fetch/response.js"(exports2, module2) {
     "use strict";
-    var { Headers: Headers2, HeadersList, fill, getHeadersGuard, setHeadersGuard, setHeadersList } = require_headers();
+    var { Headers: Headers2, HeadersList, fill: fill2, getHeadersGuard, setHeadersGuard, setHeadersList } = require_headers();
     var { extractBody, cloneBody, mixinBody, hasFinalizationRegistry, streamRegistry, bodyUnusable } = require_body();
     var util = require_util();
     var nodeUtil = require("node:util");
@@ -12601,7 +12601,7 @@ var require_response = __commonJS({
         aborted: reason && reason.name === "AbortError"
       });
     }
-    function isNetworkError(response) {
+    function isNetworkError2(response) {
       return (
         // A network error is a response whose type is "error",
         response.type === "error" && // status is 0
@@ -12675,7 +12675,7 @@ var require_response = __commonJS({
         response[kState].statusText = init.statusText;
       }
       if ("headers" in init && init.headers != null) {
-        fill(response[kHeaders], init.headers);
+        fill2(response[kHeaders], init.headers);
       }
       if (body) {
         if (nullBodyStatus.includes(response.status)) {
@@ -12754,7 +12754,7 @@ var require_response = __commonJS({
       }
     ]);
     module2.exports = {
-      isNetworkError,
+      isNetworkError: isNetworkError2,
       makeNetworkError,
       makeResponse,
       makeAppropriateNetworkError,
@@ -18716,7 +18716,7 @@ var require_eventsource = __commonJS({
     var { EventSourceStream } = require_eventsource_stream();
     var { parseMIMEType } = require_data_url();
     var { createFastMessageEvent } = require_events();
-    var { isNetworkError } = require_response();
+    var { isNetworkError: isNetworkError2 } = require_response();
     var { delay } = require_util8();
     var { kEnumerableProperty } = require_util();
     var { environmentSettingsObject } = require_util2();
@@ -18830,7 +18830,7 @@ var require_eventsource = __commonJS({
           dispatcher: this.#dispatcher
         };
         const processEventSourceEndOfBody = (response) => {
-          if (isNetworkError(response)) {
+          if (isNetworkError2(response)) {
             this.dispatchEvent(new Event("error"));
             this.close();
           }
@@ -18838,7 +18838,7 @@ var require_eventsource = __commonJS({
         };
         fetchParams.processResponseEndOfBody = processEventSourceEndOfBody;
         fetchParams.processResponse = (response) => {
-          if (isNetworkError(response)) {
+          if (isNetworkError2(response)) {
             if (response.aborted) {
               this.close();
               this.dispatchEvent(new Event("error"));
@@ -53907,8 +53907,19 @@ var providerSchema = external_exports.object({
   endpoint: external_exports.enum(["paygo", "coding"]).optional(),
   base_url: external_exports.string().optional(),
   model: external_exports.string().optional(),
-  api_key_env: external_exports.string().optional()
-}).default({ type: "none" });
+  api_key_env: external_exports.string().optional(),
+  /**
+   * Model-call time limits. One call, including retries, stays within `budget_ms` (default 70s) so a review
+   * fits the runner's 10-minute job and a Worker invocation. `timeout_ms` aborts a single attempt.
+   * Retries (network, timeout, 429, 5xx only) wait at most `max_delay_ms`, including a Retry-After header.
+   * Env MERGEJUDGE_LLM_TIMEOUT_MS, MERGEJUDGE_LLM_MAX_RETRIES, MERGEJUDGE_LLM_BUDGET_MS and
+   * MERGEJUDGE_LLM_MAX_DELAY_MS override these when set to integers.
+   */
+  timeout_ms: external_exports.number().int().min(1e3).max(9e4).default(3e4),
+  max_retries: external_exports.number().int().min(0).max(4).default(2),
+  budget_ms: external_exports.number().int().min(1e3).max(12e4).default(7e4),
+  max_delay_ms: external_exports.number().int().min(0).max(1e4).default(4e3)
+}).default({ type: "none", timeout_ms: 3e4, max_retries: 2, budget_ms: 7e4, max_delay_ms: 4e3 });
 var approvalSchema = external_exports.object({
   mode: external_exports.enum(["auto-merge-only", "bot-approve", "none"]).default("none"),
   enabled: external_exports.boolean().default(false),
@@ -55127,7 +55138,8 @@ async function fetchBaseConfig(ok, r, path2, base, log = () => {
     try {
       return { text: await fetchRepoFile(ok, r, path2, base.ref), ref: base.ref };
     } catch (e) {
-      log(`Could not read ${path2} from base branch ${base.ref} (${e.message}); falling back to base SHA.`);
+      const status = e.status;
+      log(`Could not read ${path2} from base branch ${base.ref} (${typeof status === "number" ? `HTTP ${status}` : "request failed"}); falling back to base SHA.`);
       if (!base.sha) throw e;
     }
   }
@@ -57031,6 +57043,253 @@ function retryOutputLimit(limit, room) {
 }
 var COMPACT_JSON_INSTRUCTION = "Respond with compact JSON only, no reasoning text, keep findings short.";
 
+// core/llm/http.ts
+var LLM_HTTP_DEFAULTS = {
+  timeoutMs: 3e4,
+  maxRetries: 2,
+  backoffMs: 200,
+  maxDelayMs: 4e3,
+  budgetMs: 7e4
+};
+var LLM_HTTP_LIMITS = {
+  timeoutMs: [1e3, 9e4],
+  maxRetries: [0, 4],
+  backoffMs: [0, 5e3],
+  maxDelayMs: [0, 1e4],
+  budgetMs: [1e3, 12e4]
+};
+var LlmError = class extends Error {
+  errorClass;
+  provider;
+  status;
+  /** Retry-After in ms, already capped. Omitted from the message so it cannot carry a body. */
+  retryAfterMs;
+  constructor(errorClass, info2 = {}) {
+    super(formatLlmFailure({ errorClass, provider: info2.provider, status: info2.status }));
+    this.name = "LlmError";
+    this.errorClass = errorClass;
+    this.provider = info2.provider;
+    this.status = info2.status;
+    this.retryAfterMs = info2.retryAfterMs ?? null;
+  }
+};
+function formatLlmFailure(f) {
+  const parts = [`class=${f.errorClass}`];
+  if (f.provider) parts.push(`provider=${f.provider}`);
+  if (typeof f.status === "number") parts.push(`status=${f.status}`);
+  return parts.join(" ");
+}
+function httpErrorClass(status) {
+  if (status === 429) return "http_429";
+  if (status === 408) return "timeout";
+  if (status >= 500 && status <= 599) return "http_5xx";
+  return "http_4xx";
+}
+function isRetryableLlmError(e) {
+  return e.errorClass === "timeout" || e.errorClass === "network" || e.errorClass === "http_429" || e.errorClass === "http_5xx";
+}
+var ENV_KEYS = {
+  timeoutMs: "MERGEJUDGE_LLM_TIMEOUT_MS",
+  maxRetries: "MERGEJUDGE_LLM_MAX_RETRIES",
+  budgetMs: "MERGEJUDGE_LLM_BUDGET_MS",
+  maxDelayMs: "MERGEJUDGE_LLM_MAX_DELAY_MS"
+};
+function clampInt(v, min, max) {
+  return Math.min(max, Math.max(min, v));
+}
+function pickInt(envRaw, configVal, fallback, bounds) {
+  if (envRaw !== void 0 && envRaw.trim() !== "") {
+    const n = Number(envRaw);
+    if (Number.isInteger(n)) return clampInt(n, bounds[0], bounds[1]);
+  }
+  if (typeof configVal === "number" && Number.isInteger(configVal)) return clampInt(configVal, bounds[0], bounds[1]);
+  return fallback;
+}
+function llmTransportFromConfig(cfg, env = {}) {
+  const budgetMs = pickInt(env[ENV_KEYS.budgetMs], cfg.budget_ms, LLM_HTTP_DEFAULTS.budgetMs, LLM_HTTP_LIMITS.budgetMs);
+  const timeoutMs = Math.min(budgetMs, pickInt(env[ENV_KEYS.timeoutMs], cfg.timeout_ms, LLM_HTTP_DEFAULTS.timeoutMs, LLM_HTTP_LIMITS.timeoutMs));
+  const maxDelayMs = Math.min(budgetMs, pickInt(env[ENV_KEYS.maxDelayMs], cfg.max_delay_ms, LLM_HTTP_DEFAULTS.maxDelayMs, LLM_HTTP_LIMITS.maxDelayMs));
+  return {
+    providerId: cfg.type && cfg.type !== "none" ? cfg.type : "llm",
+    timeoutMs,
+    maxRetries: pickInt(env[ENV_KEYS.maxRetries], cfg.max_retries, LLM_HTTP_DEFAULTS.maxRetries, LLM_HTTP_LIMITS.maxRetries),
+    backoffMs: LLM_HTTP_DEFAULTS.backoffMs,
+    maxDelayMs,
+    budgetMs
+  };
+}
+function parseRetryAfterMs(header, capMs, now = Date.now()) {
+  if (!header) return null;
+  const trimmed = header.trim();
+  if (!trimmed) return null;
+  const n = Number(trimmed);
+  if (Number.isFinite(n) && n >= 0) return Math.min(Math.floor(n * 1e3), capMs);
+  const d = Date.parse(trimmed);
+  if (!Number.isFinite(d)) return null;
+  return Math.min(Math.max(0, d - now), capMs);
+}
+function retryDelayMs(attempt, retryAfterMs, o) {
+  if (retryAfterMs !== null) return Math.min(o.maxDelayMs, Math.max(0, retryAfterMs));
+  const exp = Math.min(o.maxDelayMs, o.backoffMs * 2 ** Math.max(0, attempt));
+  const rand = Math.min(1, Math.max(0, o.random()));
+  return Math.min(o.maxDelayMs, Math.floor(exp / 2 + exp / 2 * rand));
+}
+function isAbortError(e) {
+  const name = e instanceof Error ? e.name : typeof e === "object" && e !== null ? e.name : void 0;
+  return name === "AbortError" || name === "TimeoutError";
+}
+var NET_CODES = /* @__PURE__ */ new Set(["ECONNRESET", "ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "ETIMEDOUT", "EPIPE", "EHOSTUNREACH", "ENETUNREACH"]);
+function isNetworkError(e) {
+  if (e instanceof TypeError) return true;
+  const code = e.code ?? e.cause?.code;
+  return typeof code === "string" && (NET_CODES.has(code) || code.startsWith("UND_ERR_"));
+}
+function statusOf(e) {
+  const s = e.status ?? e.statusCode;
+  return typeof s === "number" && Number.isInteger(s) && s >= 400 && s <= 599 ? s : void 0;
+}
+function classifyLlmFailure(e, providerHint) {
+  if (e instanceof LlmError) return { errorClass: e.errorClass, provider: e.provider ?? providerHint, status: e.status };
+  if (typeof e === "object" && e !== null && e.name === "ZodError") return { errorClass: "schema", provider: providerHint };
+  if (e instanceof SyntaxError) return { errorClass: "parse", provider: providerHint };
+  if (e instanceof Error && e.message === "no JSON object in LLM output") return { errorClass: "parse", provider: providerHint };
+  const status = statusOf(e);
+  if (status !== void 0) return { errorClass: httpErrorClass(status), provider: providerHint, status };
+  if (isAbortError(e)) return { errorClass: "timeout", provider: providerHint };
+  if (isNetworkError(e)) return { errorClass: "network", provider: providerHint };
+  return { errorClass: "parse", provider: providerHint };
+}
+function fill(partial2) {
+  const budgetMs = partial2?.budgetMs ?? LLM_HTTP_DEFAULTS.budgetMs;
+  return {
+    providerId: partial2?.providerId ?? "llm",
+    timeoutMs: Math.min(partial2?.timeoutMs ?? LLM_HTTP_DEFAULTS.timeoutMs, budgetMs),
+    maxRetries: partial2?.maxRetries ?? LLM_HTTP_DEFAULTS.maxRetries,
+    backoffMs: partial2?.backoffMs ?? LLM_HTTP_DEFAULTS.backoffMs,
+    maxDelayMs: Math.min(partial2?.maxDelayMs ?? LLM_HTTP_DEFAULTS.maxDelayMs, budgetMs),
+    budgetMs,
+    fetchImpl: partial2?.fetchImpl,
+    sleep: partial2?.sleep,
+    random: partial2?.random,
+    now: partial2?.now,
+    signal: partial2?.signal
+  };
+}
+async function defaultSleep(ms, signal) {
+  if (ms <= 0) return;
+  if (signal?.aborted) throw signal.reason ?? Object.assign(new Error("aborted"), { name: "AbortError" });
+  await new Promise((resolve2, reject) => {
+    const t = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve2();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(t);
+      reject(signal?.reason ?? Object.assign(new Error("aborted"), { name: "AbortError" }));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+function rejectOnAbort(signal) {
+  return new Promise((_, reject) => {
+    const abort = () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+    if (signal.aborted) {
+      abort();
+      return;
+    }
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
+async function runAttempt(op, timeoutMs, parent, providerId) {
+  const ctl = new AbortController();
+  let timed = false;
+  const timer = setTimeout(() => {
+    timed = true;
+    ctl.abort();
+  }, timeoutMs);
+  const onParent = () => ctl.abort();
+  if (parent?.aborted) {
+    clearTimeout(timer);
+    throw parent.reason ?? Object.assign(new Error("aborted"), { name: "AbortError" });
+  }
+  parent?.addEventListener("abort", onParent, { once: true });
+  try {
+    return await op(ctl.signal);
+  } catch (e) {
+    if (parent?.aborted) throw parent.reason ?? e;
+    if (e instanceof LlmError) throw e;
+    if (timed || isAbortError(e)) throw new LlmError("timeout", { provider: providerId });
+    if (isNetworkError(e)) throw new LlmError("network", { provider: providerId });
+    const failure2 = classifyLlmFailure(e, providerId);
+    throw new LlmError(failure2.errorClass, { provider: failure2.provider, status: failure2.status });
+  } finally {
+    clearTimeout(timer);
+    parent?.removeEventListener("abort", onParent);
+  }
+}
+async function withLlmRetries(op, partial2) {
+  const o = fill(partial2);
+  const now = o.now ?? Date.now;
+  const sleep = o.sleep ?? defaultSleep;
+  const random = o.random ?? Math.random;
+  const started = now();
+  const attempts = o.maxRetries + 1;
+  let last;
+  for (let i = 0; i < attempts; i++) {
+    if (o.signal?.aborted) throw o.signal.reason ?? Object.assign(new Error("aborted"), { name: "AbortError" });
+    const remaining = o.budgetMs - (now() - started);
+    if (remaining < 1) {
+      if (last) throw last;
+      throw new LlmError("timeout", { provider: o.providerId });
+    }
+    try {
+      return await runAttempt(op, Math.max(1, Math.min(o.timeoutMs, remaining)), o.signal, o.providerId);
+    } catch (e) {
+      if (o.signal?.aborted) throw o.signal.reason ?? e;
+      const err = e instanceof LlmError ? e : new LlmError(classifyLlmFailure(e, o.providerId).errorClass, {
+        provider: o.providerId,
+        status: classifyLlmFailure(e, o.providerId).status
+      });
+      last = err;
+      if (!isRetryableLlmError(err) || i >= attempts - 1) throw err;
+      const room = o.budgetMs - (now() - started);
+      if (room <= 0) throw err;
+      const delay = Math.min(retryDelayMs(i, err.retryAfterMs, { backoffMs: o.backoffMs, maxDelayMs: o.maxDelayMs, random }), room);
+      await sleep(delay, o.signal);
+    }
+  }
+  throw last ?? new LlmError("network", { provider: o.providerId });
+}
+async function discard(res) {
+  try {
+    await res.body?.cancel();
+  } catch {
+  }
+}
+async function postJson(url2, headers, body, transport) {
+  const o = fill(transport);
+  const fetchImpl = o.fetchImpl ?? fetch;
+  const now = o.now ?? Date.now;
+  return withLlmRetries(async (signal) => {
+    const res = await fetchImpl(url2, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify(body),
+      signal
+    });
+    if (!res.ok) {
+      const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"), o.maxDelayMs, now());
+      await discard(res);
+      throw new LlmError(httpErrorClass(res.status), { provider: o.providerId, status: res.status, retryAfterMs });
+    }
+    try {
+      return await res.json();
+    } catch {
+      throw new LlmError("parse", { provider: o.providerId, status: res.status });
+    }
+  }, o);
+}
+
 // core/llm/provider.ts
 var tokenCount = (v) => typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
 function reportUsage(sink, usage) {
@@ -57058,18 +57317,6 @@ function parseToolArgs(raw) {
   } catch {
     return {};
   }
-}
-async function postJson(url2, headers, body) {
-  const res = await fetch(url2, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...headers },
-    body: JSON.stringify(body)
-  });
-  if (!res.ok) {
-    const text = (await res.text().catch(() => "")).slice(0, 200);
-    throw new Error(`LLM HTTP ${res.status}: ${text}`);
-  }
-  return res.json();
 }
 
 // core/triage.ts
@@ -57322,8 +57569,8 @@ function tokenBreakdown(opts) {
 function outputLimitWarning(o) {
   return `LLM output limit: ${o.ref ?? "?"} model=${o.model ?? "?"} limit=${o.limit} output_tokens=${o.outputTokens} truncated=${o.truncated} retry=${o.retry}${o.retryLimit ? ` (limit ${o.retryLimit}, compact JSON)` : ""}`;
 }
-function retryInstruction(truncated, why) {
-  const reason = truncated ? "Your previous reply was cut off at the output limit" : `Your previous reply was not valid JSON (${why})`;
+function retryInstruction(truncated) {
+  const reason = truncated ? "Your previous reply was cut off at the output limit" : "Your previous reply was not valid JSON";
   return `REPAIR: ${reason}. ${COMPACT_JSON_INSTRUCTION} Reply with ONLY a single JSON object matching the schema. No markdown fences, no prose.`;
 }
 async function runTriage(provider, input2, cfg, ctx = {}, log = () => {
@@ -57336,7 +57583,6 @@ ${CONTEXT_RULES}` : "");
   const skipped = ctx.skippedDiffFiles ?? [];
   let raw = "";
   let retried = false;
-  let lastErr = "unknown parse error";
   const limit = resolveOutputLimit(cfg);
   let retryLimit = limit;
   let firstTruncated = false, firstOut = 0, lastTruncated = false;
@@ -57357,7 +57603,7 @@ ${CONTEXT_RULES}` : "");
           system,
           user: repair ? `${prompt}
 
-${retryInstruction(firstTruncated, lastErr)}` : prompt,
+${retryInstruction(firstTruncated)}` : prompt,
           maxOutputTokens: repair ? retryLimit : limit,
           jsonMode: true
         });
@@ -57372,7 +57618,7 @@ ${retryInstruction(firstTruncated, lastErr)}` : prompt,
           llm = validateAgainstFiles(parseTriageOutput(raw), input2.files, ctx.criteria ?? []);
         } catch (pe) {
           if (!r.truncated) throw pe;
-          throw new Error(`output truncated at ${repair ? retryLimit : limit} tokens (${pe.message})`);
+          throw new LlmError("parse", { provider: provider.providerId });
         }
         const outTok = estimateTokens(raw);
         if (retried) {
@@ -57381,19 +57627,20 @@ ${retryInstruction(firstTruncated, lastErr)}` : prompt,
         }
         return { llm, tokensEstimate: estimateTokens(system) + diffTokens + outTok, breakdown: mkBreakdown(outTok), retried, ...firstTruncated ? { truncated: true } : {}, outputLimit: limit };
       } catch (e) {
-        lastErr = e.message.slice(0, 160);
-        log(`LLM JSON attempt ${attempt + 1} failed: ${lastErr}`);
+        const info2 = classifyLlmFailure(e, provider.providerId);
+        log(`LLM JSON attempt ${attempt + 1} failed: ${formatLlmFailure(info2)}`);
         if (attempt === 1) throw e;
       }
     }
-    throw new Error("unreachable");
+    throw new LlmError("parse", { provider: provider.providerId });
   } catch (e) {
+    const info2 = classifyLlmFailure(e, provider.providerId);
     const outTok = estimateTokens(raw);
-    log(`LLM triage falling back to rules-only after JSON failure: ${e.message.slice(0, 160)}`);
+    log(`LLM triage falling back to rules-only after JSON failure: ${formatLlmFailure(info2)}`);
     if (retried) warn(outputLimitWarning({ ref: ctx.ref, model: cfg.provider.model, limit, retryLimit, outputTokens: firstOut, truncated: firstTruncated || lastTruncated, retry: "failed" }));
     return {
       llm: null,
-      error: e.message.slice(0, 200),
+      error: info2.errorClass,
       tokensEstimate: estimateTokens(system) + diffTokens + outTok,
       breakdown: mkBreakdown(outTok),
       retried,
@@ -57553,7 +57800,7 @@ ${deepRules(cfg, opts.tools)}`;
         if (i >= MAX_CALLS_PER_STEP) out = `error: at most ${MAX_CALLS_PER_STEP} tool calls per round; this one was skipped`;
         else {
           toolCalls++;
-          out = await opts.tools.run(c.name, c.args).catch((e) => `error: ${e.message.slice(0, 120)}`);
+          out = await opts.tools.run(c.name, c.args).catch(() => "error: tool failed");
         }
         return { c, content: fenceToolResult(c.name, c.args, out, cfg.deep.max_tool_output_bytes) };
       }));
@@ -57571,24 +57818,25 @@ ${deepRules(cfg, opts.tools)}`;
     try {
       return result(validateAgainstFiles(parseTriageOutput(raw), input2.files, ctx.criteria ?? []));
     } catch (e) {
-      const why = e.message.slice(0, 160);
-      log(`LLM JSON attempt 1 failed: ${why}`);
+      const info2 = classifyLlmFailure(e, provider.providerId);
+      log(`LLM JSON attempt 1 failed: ${formatLlmFailure(info2)}`);
       retried = true;
       firstTruncated = lastTruncated;
       firstOut = lastOut;
       const convNow = sysTok + messages.reduce((n, m) => n + turnTokens(m), 0);
       retryLimit = retryOutputLimit(limit, cfg.deep.max_tokens - used - convNow);
       messages.push({ role: "assistant", content: raw });
-      messages.push({ role: "user", content: retryInstruction(firstTruncated, why) });
+      messages.push({ role: "user", content: retryInstruction(firstTruncated) });
       raw = (await turn(void 0, true, retryLimit)).text;
       const llm = validateAgainstFiles(parseTriageOutput(raw), input2.files, ctx.criteria ?? []);
       warn(outputLimitWarning({ ref: ctx.ref, model: cfg.provider.model, limit, retryLimit, outputTokens: firstOut, truncated: firstTruncated, retry: "succeeded" }));
       return result(llm);
     }
   } catch (e) {
-    log(`LLM triage falling back to rules-only after deep-mode failure: ${e.message.slice(0, 160)}`);
+    const info2 = classifyLlmFailure(e, provider.providerId);
+    log(`LLM triage falling back to rules-only after deep-mode failure: ${formatLlmFailure(info2)}`);
     if (retried) warn(outputLimitWarning({ ref: ctx.ref, model: cfg.provider.model, limit, retryLimit, outputTokens: firstOut, truncated: firstTruncated || lastTruncated, retry: "failed" }));
-    return result(null, e.message.slice(0, 200));
+    return result(null, info2.errorClass);
   }
 }
 function hitText(snap, id) {
@@ -57743,18 +57991,22 @@ function anthropicUsage(u) {
   return { input: tokenCount(u.input_tokens), output: tokenCount(u.output_tokens), cacheRead: tokenCount(u.cache_read_input_tokens), cacheWrite: tokenCount(u.cache_creation_input_tokens) };
 }
 var AnthropicProvider = class {
-  constructor(baseUrl2, model, apiKey, onUsage) {
+  constructor(baseUrl2, model, apiKey, onUsage, transport = {}) {
     this.baseUrl = baseUrl2;
     this.model = model;
     this.apiKey = apiKey;
     this.onUsage = onUsage;
+    this.transport = transport;
     this.label = model;
+    this.providerId = transport.providerId ?? "anthropic";
   }
   baseUrl;
   model;
   apiKey;
   onUsage;
+  transport;
   label;
+  providerId;
   supportsTools = true;
   url() {
     return `${this.baseUrl.replace(/\/+$/, "")}/v1/messages`;
@@ -57762,9 +58014,15 @@ var AnthropicProvider = class {
   headers() {
     return { "x-api-key": this.apiKey, "anthropic-version": "2023-06-01" };
   }
+  http() {
+    return { ...this.transport, providerId: this.providerId };
+  }
+  empty() {
+    throw new LlmError("parse", { provider: this.providerId });
+  }
   async complete(req) {
     const r = await this.completeEx(req);
-    if (!r.text) throw new Error("LLM response had no text content");
+    if (!r.text) this.empty();
     return r.text;
   }
   async completeEx(req) {
@@ -57776,7 +58034,8 @@ var AnthropicProvider = class {
         max_tokens: req.maxOutputTokens,
         system: req.system,
         messages: [{ role: "user", content: req.user }]
-      }
+      },
+      this.http()
     );
     reportUsage(this.onUsage, anthropicUsage(data.usage));
     const text = (data.content ?? []).filter((b) => b.type === "text" && typeof b.text === "string").map((b) => b.text).join("");
@@ -57793,14 +58052,15 @@ var AnthropicProvider = class {
         system: req.system,
         messages: toAnthropicMessages(req.messages),
         ...req.tools?.length ? { tools: req.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })) } : {}
-      }
+      },
+      this.http()
     );
     reportUsage(this.onUsage, anthropicUsage(data.usage));
     const blocks = data.content ?? [];
     const text = blocks.filter((b) => b.type === "text" && typeof b.text === "string").map((b) => b.text).join("");
     const toolCalls = blocks.flatMap((b, i) => b.type === "tool_use" && b.name ? [{ id: b.id || `toolu_${i}`, name: b.name, args: b.input && typeof b.input === "object" ? b.input : {} }] : []);
     const truncated = isTruncated(data.stop_reason === "max_tokens", tokenCount(data.usage?.output_tokens), req.maxOutputTokens);
-    if (!text && !toolCalls.length && !truncated) throw new Error("LLM response had no text content");
+    if (!text && !toolCalls.length && !truncated) this.empty();
     return {
       text,
       toolCalls,
@@ -57828,25 +58088,35 @@ function toOpenAiMessages(system, messages) {
 }
 var oaUsage = (u) => u && typeof u === "object" ? openAiUsage(u.prompt_tokens, u.completion_tokens, u.prompt_tokens_details?.cached_tokens) : null;
 var OpenAiProvider = class {
-  constructor(baseUrl2, model, apiKey, onUsage) {
+  constructor(baseUrl2, model, apiKey, onUsage, transport = {}) {
     this.baseUrl = baseUrl2;
     this.model = model;
     this.apiKey = apiKey;
     this.onUsage = onUsage;
+    this.transport = transport;
     this.label = model;
+    this.providerId = transport.providerId ?? "openai";
   }
   baseUrl;
   model;
   apiKey;
   onUsage;
+  transport;
   label;
+  providerId;
   supportsTools = true;
   url() {
     return `${this.baseUrl.replace(/\/+$/, "")}/chat/completions`;
   }
+  http() {
+    return { ...this.transport, providerId: this.providerId };
+  }
+  empty() {
+    throw new LlmError("parse", { provider: this.providerId });
+  }
   async complete(req) {
     const r = await this.completeEx(req);
-    if (!r.text) throw new Error("LLM response had no message content");
+    if (!r.text) this.empty();
     return r.text;
   }
   async completeEx(req) {
@@ -57862,13 +58132,14 @@ var OpenAiProvider = class {
           { role: "system", content: req.system },
           { role: "user", content: req.user }
         ]
-      }
+      },
+      this.http()
     );
     reportUsage(this.onUsage, oaUsage(data.usage));
     const content = data.choices?.[0]?.message?.content;
     const outputTokens = tokenCount(data.usage?.completion_tokens);
     const truncated = isTruncated(data.choices?.[0]?.finish_reason === "length", outputTokens, req.maxOutputTokens);
-    if (typeof content !== "string" && !truncated) throw new Error("LLM response had no message content");
+    if (typeof content !== "string" && !truncated) this.empty();
     return { text: typeof content === "string" ? content : "", truncated, outputTokens };
   }
   async chat(req) {
@@ -57884,15 +58155,16 @@ var OpenAiProvider = class {
         ...tools ? { tools: tools.map((t) => ({ type: "function", function: t })), tool_choice: "auto" } : {},
         // JSON mode and tools do not mix on every endpoint; it is only requested on the tool-less final turn.
         ...req.jsonMode && !tools ? { response_format: { type: "json_object" } } : {}
-      }
+      },
+      this.http()
     );
     reportUsage(this.onUsage, oaUsage(data.usage));
     const msg = data.choices?.[0]?.message;
-    if (!msg) throw new Error("LLM response had no message");
+    if (!msg) this.empty();
     const toolCalls = (msg.tool_calls ?? []).flatMap((c, i) => c.function?.name ? [{ id: c.id || `call_${i}`, name: c.function.name, args: parseToolArgs(c.function.arguments) }] : []);
     const text = typeof msg.content === "string" ? msg.content : "";
     const truncated = isTruncated(data.choices?.[0]?.finish_reason === "length", tokenCount(data.usage?.completion_tokens), req.maxOutputTokens);
-    if (!text && !toolCalls.length && !truncated) throw new Error("LLM response had no message content");
+    if (!text && !toolCalls.length && !truncated) this.empty();
     return {
       text,
       toolCalls,
@@ -57918,25 +58190,35 @@ function toResponsesInput(messages) {
 var respCut = (d) => d.status === "incomplete" && (d.incomplete_details?.reason ?? "max_output_tokens") === "max_output_tokens";
 var respUsage = (u) => u && typeof u === "object" ? openAiUsage(u.input_tokens, u.output_tokens, u.input_tokens_details?.cached_tokens) : null;
 var OpenAiResponsesProvider = class {
-  constructor(baseUrl2, model, apiKey, onUsage) {
+  constructor(baseUrl2, model, apiKey, onUsage, transport = {}) {
     this.baseUrl = baseUrl2;
     this.model = model;
     this.apiKey = apiKey;
     this.onUsage = onUsage;
+    this.transport = transport;
     this.label = model;
+    this.providerId = transport.providerId ?? "openai";
   }
   baseUrl;
   model;
   apiKey;
   onUsage;
+  transport;
   label;
+  providerId;
   supportsTools = true;
   url() {
     return `${this.baseUrl.replace(/\/+$/, "")}/responses`;
   }
+  http() {
+    return { ...this.transport, providerId: this.providerId };
+  }
+  empty() {
+    throw new LlmError("parse", { provider: this.providerId });
+  }
   async complete(req) {
     const r = await this.completeEx(req);
-    if (!r.text) throw new Error("LLM response had no output text");
+    if (!r.text) this.empty();
     return r.text;
   }
   async completeEx(req) {
@@ -57949,7 +58231,8 @@ var OpenAiResponsesProvider = class {
         input: req.user,
         max_output_tokens: req.maxOutputTokens,
         ...req.jsonMode ? { text: { format: { type: "json_object" } } } : {}
-      }
+      },
+      this.http()
     );
     reportUsage(this.onUsage, respUsage(data.usage));
     const text = typeof data.output_text === "string" && data.output_text ? data.output_text : (data.output ?? []).flatMap((o) => o.content ?? []).filter((c) => c.type === "output_text").map((c) => c.text ?? "").join("");
@@ -57969,14 +58252,15 @@ var OpenAiResponsesProvider = class {
         store: false,
         ...tools ? { tools: tools.map((t) => ({ type: "function", ...t })) } : {},
         ...req.jsonMode && !tools ? { text: { format: { type: "json_object" } } } : {}
-      }
+      },
+      this.http()
     );
     reportUsage(this.onUsage, respUsage(data.usage));
     const items = data.output ?? [];
     const text = typeof data.output_text === "string" && data.output_text ? data.output_text : items.flatMap((o) => o.content ?? []).filter((c) => c.type === "output_text").map((c) => c.text ?? "").join("");
     const toolCalls = items.flatMap((o, i) => o.type === "function_call" && o.name ? [{ id: o.call_id || o.id || `call_${i}`, name: o.name, args: parseToolArgs(o.arguments) }] : []);
     const truncated = isTruncated(respCut(data), tokenCount(data.usage?.output_tokens), req.maxOutputTokens);
-    if (!text && !toolCalls.length && !truncated) throw new Error("LLM response had no output text");
+    if (!text && !toolCalls.length && !truncated) this.empty();
     return {
       text,
       toolCalls,
@@ -57989,28 +58273,40 @@ var OpenAiResponsesProvider = class {
 // core/llm/workersai.ts
 var WorkersAiProvider = class {
   // tool calling differs per model; deep mode falls back to context
-  constructor(ai, model, onUsage) {
+  constructor(ai, model, onUsage, transport = {}) {
     this.ai = ai;
     this.model = model;
     this.onUsage = onUsage;
+    this.transport = transport;
     this.label = model;
+    this.providerId = transport.providerId ?? "workers-ai";
   }
   ai;
   model;
   onUsage;
+  transport;
   label;
+  providerId;
   supportsTools = false;
   async complete(req) {
     const r = await this.completeEx(req);
-    if (!r.text) throw new Error("Workers AI response had no text");
+    if (!r.text) throw new LlmError("parse", { provider: this.providerId });
     return r.text;
   }
   async completeEx(req) {
-    const out = await this.ai.run(this.model, {
-      messages: [{ role: "system", content: req.system }, { role: "user", content: req.user }],
-      max_tokens: req.maxOutputTokens,
-      ...req.jsonMode ? { response_format: { type: "json_object" } } : {}
-    });
+    const out = await withLlmRetries(
+      (signal) => {
+        const pending = this.ai.run(this.model, {
+          messages: [{ role: "system", content: req.system }, { role: "user", content: req.user }],
+          max_tokens: req.maxOutputTokens,
+          ...req.jsonMode ? { response_format: { type: "json_object" } } : {}
+        });
+        void pending.catch(() => {
+        });
+        return Promise.race([pending, rejectOnAbort(signal)]);
+      },
+      { ...this.transport, providerId: this.providerId }
+    );
     const u = out?.usage;
     reportUsage(this.onUsage, u && typeof u === "object" ? openAiUsage(u.prompt_tokens, u.completion_tokens, 0) : null);
     const r = out?.response ?? out?.choices?.[0]?.message?.content;
@@ -58060,9 +58356,10 @@ function createProvider(cfg, env = process.env, bindings = {}) {
   if (!cfg.model) return { provider: null, note: "provider.model not set" };
   const model = cfg.model;
   const onUsage = bindings.onCall ? (usage) => bindings.onCall({ provider: priceProvider(cfg), model, usage }) : void 0;
+  const transport = llmTransportFromConfig(cfg, env);
   if (cfg.type === "workers-ai") {
     if (!bindings.ai) return { provider: null, note: "Workers AI binding `AI` not available (Worker runtime only)" };
-    return { provider: new WorkersAiProvider(bindings.ai, model, onUsage) };
+    return { provider: new WorkersAiProvider(bindings.ai, model, onUsage, transport) };
   }
   const keyEnv = providerKeyEnv(cfg);
   const key = env[keyEnv];
@@ -58070,12 +58367,12 @@ function createProvider(cfg, env = process.env, bindings = {}) {
   const base = providerBaseUrl(cfg);
   switch (cfg.type) {
     case "anthropic":
-      return { provider: new AnthropicProvider(base, model, key, onUsage) };
+      return { provider: new AnthropicProvider(base, model, key, onUsage, transport) };
     case "openai":
-      return cfg.api === "responses" ? { provider: new OpenAiResponsesProvider(base, model, key, onUsage) } : { provider: new OpenAiProvider(base, model, key, onUsage) };
+      return cfg.api === "responses" ? { provider: new OpenAiResponsesProvider(base, model, key, onUsage, transport) } : { provider: new OpenAiProvider(base, model, key, onUsage, transport) };
     case "openai-compatible":
     case "zai":
-      return { provider: new OpenAiProvider(base, model, key, onUsage) };
+      return { provider: new OpenAiProvider(base, model, key, onUsage, transport) };
     default: {
       const unhandled = cfg.type;
       throw new Error(`createProvider: no adapter for provider.type ${String(unhandled)}`);
@@ -58084,6 +58381,9 @@ function createProvider(cfg, env = process.env, bindings = {}) {
 }
 
 // core/review.ts
+function aiUnavailableNote(errorClass, truncated = false) {
+  return truncated ? `AI review unavailable (${errorClass}). Output was cut off at the token limit.` : `AI review unavailable (${errorClass}).`;
+}
 async function produceReviewResult(o) {
   const { pr, cfg, cfgRef, files, provider, log } = o;
   const number4 = pr.number;
@@ -58179,7 +58479,7 @@ async function produceReviewResult(o) {
       else if (!o.deep) fallback("needs the hosted indexer");
       else {
         const skip = (p) => excludeFromLlm([{ path: p }], cfg.diff_exclude).skipped.length > 0;
-        const prep = await prepareDeepIndex({ ...o.deep, policy: cfg.index.policy }, kept, log.info).catch((e) => ({ ok: false, reason: `index error: ${e.message.slice(0, 120)}` }));
+        const prep = await prepareDeepIndex({ ...o.deep, policy: cfg.index.policy }, kept, log.info).catch(() => ({ ok: false, reason: "index error" }));
         if (!prep.ok) fallback(prep.reason);
         else {
           for (const n of prep.notes) log.info(`deep: ${n}`);
@@ -58204,7 +58504,7 @@ async function produceReviewResult(o) {
     log.info(
       `Tokens ~${res.breakdown.total} (system ${res.breakdown.system} \xB7 policy ${res.breakdown.policy} \xB7 rubric ${res.breakdown.rubric} \xB7 diff ${res.breakdown.diff}${res.breakdown.context ? ` \xB7 context ${res.breakdown.context}` : ""}${res.breakdown.tools ? ` \xB7 tools ${res.breakdown.tools} (${res.breakdown.tool_calls} calls)` : ""} \xB7 out ${res.breakdown.output}) \xB7 mode ${mode}` + (res.retried ? " \xB7 JSON repair retry used" : "")
     );
-    if (!llm) notes.push(`LLM triage failed (${res.error}${res.truncated ? `; output cut off at the ${res.outputLimit}-token limit, retry failed` : ""}); rules-only.`);
+    if (!llm) notes.push(aiUnavailableNote(res.error ?? "parse", res.truncated === true));
     else if (o.llmCache) {
       await o.llmCache.put({ llm, tokens: tokens2, breakdown: res.breakdown, policiesUsed: policies.used }).catch((e) => log.warning(`Could not cache LLM result: ${e.message}`));
     }
@@ -58351,6 +58651,57 @@ async function runReview(o) {
   });
 }
 
+// src/redact.ts
+var PATTERNS = [
+  /mjr_[ea]_[A-Za-z0-9_-]{6,}/g,
+  // MergeJudge runner / enrollment tokens
+  /sk-ant-[A-Za-z0-9_-]{6,}/g,
+  // Anthropic keys and OAuth tokens
+  /Bearer\s+[A-Za-z0-9._~+/=-]{8,}/gi,
+  /\b(?:authorization|proxy-authorization|x-api-key|api-key|x-auth-token)\s*[:=]\s*[^,\s"]+/gi,
+  /\b(ANTHROPIC_[A-Z_]+|MERGEJUDGE_[A-Z_]*(?:TOKEN|KEY|SECRET)[A-Z_]*|CLAUDE_CODE_OAUTH_TOKEN)=\S+/g,
+  /\bgh[pousr]_[A-Za-z0-9]{20,}/g,
+  /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}/g,
+  // OpenAI-style keys
+  /\b[0-9a-f]{32}\.[A-Za-z0-9]{8,}\b/g,
+  // z.ai API keys (<32 hex>.<secret>)
+  /\b(ZAI_[A-Z_]*|OPENAI_[A-Z_]*|CODEX_[A-Z_]*(?:KEY|TOKEN)[A-Z_]*)=\S+/g,
+  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
+  // JWT
+  /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,
+  // email
+  /(?<![A-Za-z0-9+/])(?:[A-Za-z0-9+/]{4}){10,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?(?![A-Za-z0-9+/])/g,
+  // long standard base64 (40+ chars; padding is not a word char)
+  /\b(?:[A-Za-z0-9_-]{4}){12,}\b/g,
+  // long url-safe token (48+ chars)
+  /\b[0-9a-fA-F]{32,}\b/g
+  // long hex (specific key shapes above run first)
+];
+var REDACTED = "[redacted]";
+var MAX_LOG_CHARS = 4e3;
+function mustDrop(text) {
+  if (text.length > MAX_LOG_CHARS) return true;
+  if (text.includes("diff --git ") || /@@ -\d+(?:,\d+)? \+\d+/.test(text)) return true;
+  if (/<\/?untrusted_pr_data>/i.test(text)) return true;
+  if (text.includes("You are MergeJudge, a pull request risk triager")) return true;
+  if (/"summary"\s*:/.test(text) && /"lane"\s*:/.test(text) && /"files"\s*:/.test(text)) return true;
+  return false;
+}
+function redact(text, secrets = []) {
+  if (mustDrop(text)) return REDACTED;
+  let out = text;
+  for (const s of secrets) if (s && s.length >= 6) out = out.split(s).join(REDACTED);
+  for (const re of PATTERNS) out = out.replace(re, REDACTED);
+  return out;
+}
+function redactedLogs(sink, secrets = []) {
+  return {
+    info: (m) => sink.info(redact(m, secrets)),
+    warning: (m) => sink.warning(redact(m, secrets))
+  };
+}
+
 // src/workspace.ts
 var import_node_fs = require("node:fs");
 var import_node_path = require("node:path");
@@ -58386,10 +58737,11 @@ function runGit(args, o = {}) {
     });
     child.on("error", (e) => reject(new GitError(`could not run git: ${e.message}`, null, "")));
     child.on("close", (code) => {
-      const stderr = scrubUrl(Buffer.concat(err).toString("utf8"));
-      if (over) return reject(new GitError(`git ${args[0]} output exceeded ${max} bytes`, code, stderr));
+      const stderr = redact(scrubUrl(Buffer.concat(err).toString("utf8")));
+      const sub = args[0] ?? "command";
+      if (over) return reject(new GitError(`git ${sub} output exceeded ${max} bytes`, code, stderr));
       const res = { code: code ?? -1, stdout: Buffer.concat(out).toString("utf8"), stderr };
-      if (res.code !== 0 && !o.allowFail) return reject(new GitError(`git ${args[0]} failed (${res.code}): ${stderr.trim().slice(0, 400)}`, res.code, stderr));
+      if (res.code !== 0 && !o.allowFail) return reject(new GitError(`git ${sub} failed (${res.code})`, res.code, stderr));
       resolve2(res);
     });
     child.stdin.on("error", () => {
@@ -58450,21 +58802,31 @@ async function retrieveFromWorkspace(dir, kept, cfg, repoName, log, limits = WOR
 }
 
 // src/action.ts
+var secretSink = [];
+function remember(value) {
+  if (value && value.length >= 6 && !secretSink.includes(value)) secretSink.push(value);
+}
+function logs() {
+  return redactedLogs({ info: (m) => info(m), warning: (m) => warning(m) }, secretSink);
+}
 async function auth2() {
   const repo = context2.repo;
   const appId = getInput("app_id");
   const appKey = getInput("app_private_key");
   let token = getInput("github_token", { required: true });
+  remember(token);
+  remember(appKey);
   let appToken = false;
   let botLogin = null;
   if (appId && appKey) {
     try {
       token = await installationToken(appId, appKey, repo.owner, repo.repo, { apiUrl: process.env.GITHUB_API_URL });
+      remember(token);
       setSecret(token);
       appToken = true;
-      info("Using GitHub App installation token.");
+      logs().info("Using GitHub App installation token.");
     } catch (e) {
-      warning(`GitHub App token failed (${e.message}); falling back to github_token.`);
+      logs().warning(`GitHub App token failed (${e.message}); falling back to github_token.`);
     }
   }
   const ok = getOctokit(token);
@@ -58479,21 +58841,23 @@ async function auth2() {
 }
 async function loadCfg(ok, repo, base) {
   const cfgPath = getInput("config_path") || ".mergejudge.yml";
-  const { text, ref: cfgRef } = await fetchBaseConfig(ok, repo, cfgPath, base, warning);
-  info(`Config ${cfgPath} read from base ${cfgRef}.`);
+  const log = logs();
+  const { text, ref: cfgRef } = await fetchBaseConfig(ok, repo, cfgPath, base, log.warning);
+  log.info(`Config ${cfgPath} read from base ${cfgRef}.`);
   const cfg = applyProviderOverrides(parseConfig(text), {
     type: getInput("provider"),
     base_url: getInput("base_url"),
     model: getInput("model"),
     api_key_env: getInput("api_key_env")
   });
-  if (text === null) info(`No ${cfgPath} on base; using defaults.`);
+  if (text === null) log.info(`No ${cfgPath} on base; using defaults.`);
   return { cfg, cfgRef };
 }
 async function runTriageMode() {
   const pr = context2.payload.pull_request;
+  const log = logs();
   if (!pr) {
-    info("Not a pull_request event; nothing to do.");
+    log.info("Not a pull_request event; nothing to do.");
     return;
   }
   const { ok, repo, appToken, botLogin } = await auth2();
@@ -58511,9 +58875,9 @@ async function runTriageMode() {
     retrieveDeep: async (kept) => {
       const dir = process.env.GITHUB_WORKSPACE;
       if (!dir) throw new WorkspaceError("GITHUB_WORKSPACE is not set");
-      return retrieveFromWorkspace(dir, kept, cfg, `${repo.owner}/${repo.repo}`, info);
+      return retrieveFromWorkspace(dir, kept, cfg, `${repo.owner}/${repo.repo}`, log.info);
     },
-    log: { info, warning }
+    log
   });
   setOutput("lane", lane);
 }
@@ -58526,14 +58890,14 @@ async function runFeedbackMode() {
     payload: context2.payload,
     defaultBranch,
     loadConfig: async () => (await loadCfg(ok, repo, { ref: defaultBranch })).cfg,
-    log: { info, warning }
+    log: logs()
   });
 }
 async function runProposeMode() {
   const { ok, repo } = await auth2();
   const defaultBranch = context2.payload.repository?.default_branch ?? "main";
   const { cfg } = await loadCfg(ok, repo, { ref: defaultBranch });
-  const pr = await runPropose({ ok, repo, cfg, defaultBranch, log: { info, warning } });
+  const pr = await runPropose({ ok, repo, cfg, defaultBranch, log: logs() });
   if (pr) setOutput("proposal_pr", String(pr));
 }
 async function run() {
@@ -58545,12 +58909,12 @@ async function run() {
     else if (event === "schedule" || event === "workflow_dispatch") mode = "propose";
     else mode = "triage";
   }
-  info(`MergeJudge mode=${mode} event=${event}`);
+  logs().info(`MergeJudge mode=${mode} event=${event}`);
   if (mode === "feedback") await runFeedbackMode();
   else if (mode === "propose") await runProposeMode();
   else await runTriageMode();
 }
-run().catch((e) => setFailed(e instanceof Error ? e.message : String(e)));
+run().catch((e) => setFailed(redact(e instanceof Error ? e.message : String(e), secretSink)));
 /*! Bundled license information:
 
 undici/lib/web/fetch/body.js:

@@ -1,5 +1,6 @@
 /** Thin git wrapper for the local-code path. Never prompts (GIT_TERMINAL_PROMPT=0), never puts a credential on argv. */
 import { spawn } from "node:child_process";
+import { redact } from "./redact.js";
 
 export class GitError extends Error {
   constructor(message: string, readonly code: number | null, readonly stderr: string) { super(message); }
@@ -19,6 +20,12 @@ export interface GitOptions {
 /** Hide user:password@ in anything shown to a human or logged. */
 export const scrubUrl = (s: string): string => s.replace(/(\w+:\/\/)[^/@\s]+@/g, "$1***@");
 
+/**
+ * Git stderr is kept on GitError for local classification (auth failure vs missing commit) after URL and
+ * secret scrubbing. It is not part of the Error message: filter output, diff drivers and remote sideband
+ * text can contain file contents, so the message that gets logged or nacked is only the subcommand and exit code.
+ */
+
 export function runGit(args: string[], o: GitOptions = {}): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const env = { ...process.env, ...o.env, GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" } as Record<string, string>;
@@ -30,10 +37,11 @@ export function runGit(args: string[], o: GitOptions = {}): Promise<{ code: numb
     child.stderr.on("data", (d: Buffer) => { if (err.reduce((n, b) => n + b.length, 0) < 64_000) err.push(d); });
     child.on("error", (e) => reject(new GitError(`could not run git: ${(e as Error).message}`, null, "")));
     child.on("close", (code) => {
-      const stderr = scrubUrl(Buffer.concat(err).toString("utf8"));
-      if (over) return reject(new GitError(`git ${args[0]} output exceeded ${max} bytes`, code, stderr));
+      const stderr = redact(scrubUrl(Buffer.concat(err).toString("utf8")));
+      const sub = args[0] ?? "command";
+      if (over) return reject(new GitError(`git ${sub} output exceeded ${max} bytes`, code, stderr));
       const res = { code: code ?? -1, stdout: Buffer.concat(out).toString("utf8"), stderr };
-      if (res.code !== 0 && !o.allowFail) return reject(new GitError(`git ${args[0]} failed (${res.code}): ${stderr.trim().slice(0, 400)}`, res.code, stderr));
+      if (res.code !== 0 && !o.allowFail) return reject(new GitError(`git ${sub} failed (${res.code})`, res.code, stderr));
       resolve(res);
     });
     child.stdin.on("error", () => {});

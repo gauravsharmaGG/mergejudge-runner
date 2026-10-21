@@ -42,6 +42,8 @@ export const isTruncated = (byReason: boolean, outputTokens: number, limit: numb
 
 export interface LlmProvider {
   readonly label: string; // shown in the comment footer
+  /** Stable id for error logs (`openai`, `anthropic`, `workers-ai`, …). Not the model name. */
+  readonly providerId?: string;
   complete(req: LlmRequest): Promise<string>;
   /** Like `complete`, but also reports truncation. Without it the reply is assumed complete. */
   completeEx?(req: LlmRequest): Promise<LlmResult>;
@@ -95,15 +97,8 @@ export function parseToolArgs(raw: unknown): Record<string, unknown> {
   } catch { return {}; }
 }
 
-export async function postJson(url: string, headers: Record<string, string>, body: unknown): Promise<unknown> {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...headers },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const text = (await res.text().catch(() => "")).slice(0, 200);
-    throw new Error(`LLM HTTP ${res.status}: ${text}`);
-  }
-  return res.json();
-}
+export {
+  classifyLlmFailure, formatLlmFailure, httpErrorClass, isRetryableLlmError, llmTransportFromConfig, LlmError, LLM_HTTP_DEFAULTS, LLM_HTTP_LIMITS,
+  parseRetryAfterMs, postJson, rejectOnAbort, retryDelayMs, withLlmRetries,
+  type LlmErrorClass, type LlmFailure, type LlmTransport, type ProviderHttpConfig,
+} from "./http.js";

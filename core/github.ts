@@ -107,7 +107,8 @@ export async function fetchBaseConfig(
     try {
       return { text: await fetchRepoFile(ok, r, path, base.ref), ref: base.ref };
     } catch (e) {
-      log(`Could not read ${path} from base branch ${base.ref} (${(e as Error).message}); falling back to base SHA.`);
+      const status = (e as { status?: number }).status;
+      log(`Could not read ${path} from base branch ${base.ref} (${typeof status === "number" ? `HTTP ${status}` : "request failed"}); falling back to base SHA.`);
       if (!base.sha) throw e; // nothing to fall back to; surface the real cause (e.g. 409 empty repo), not a generic one
     }
   }

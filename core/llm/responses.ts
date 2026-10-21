@@ -1,4 +1,5 @@
-import { isTruncated, openAiUsage, tokenCount, parseToolArgs, postJson, reportUsage, type UsageSink, type ChatMessage, type ChatRequest, type ChatTurn, type LlmProvider, type LlmRequest, type LlmResult } from "./provider.js";
+import { LlmError, postJson, type LlmTransport } from "./http.js";
+import { isTruncated, openAiUsage, tokenCount, parseToolArgs, reportUsage, type UsageSink, type ChatMessage, type ChatRequest, type ChatTurn, type LlmProvider, type LlmRequest, type LlmResult } from "./provider.js";
 
 /** Responses API input items for a tool conversation (stateless: the full history is re-sent). */
 export function toResponsesInput(messages: ChatMessage[]): Record<string, unknown>[] {
@@ -24,14 +25,18 @@ const respUsage = (u: RespUsage | undefined) => (u && typeof u === "object" ? op
 /** OpenAI Responses API (`/v1/responses`). API keys only. */
 export class OpenAiResponsesProvider implements LlmProvider {
   readonly label: string;
+  readonly providerId: string;
   readonly supportsTools = true;
-  constructor(private baseUrl: string, private model: string, private apiKey: string, private onUsage?: UsageSink) {
+  constructor(private baseUrl: string, private model: string, private apiKey: string, private onUsage?: UsageSink, private transport: Partial<LlmTransport> = {}) {
     this.label = model;
+    this.providerId = transport.providerId ?? "openai";
   }
   private url() { return `${this.baseUrl.replace(/\/+$/, "")}/responses`; }
+  private http(): Partial<LlmTransport> { return { ...this.transport, providerId: this.providerId }; }
+  private empty(): never { throw new LlmError("parse", { provider: this.providerId }); }
   async complete(req: LlmRequest): Promise<string> {
     const r = await this.completeEx(req);
-    if (!r.text) throw new Error("LLM response had no output text");
+    if (!r.text) this.empty();
     return r.text;
   }
   async completeEx(req: LlmRequest): Promise<LlmResult> {
@@ -45,6 +50,7 @@ export class OpenAiResponsesProvider implements LlmProvider {
         max_output_tokens: req.maxOutputTokens,
         ...(req.jsonMode ? { text: { format: { type: "json_object" } } } : {}),
       },
+      this.http(),
     )) as { output_text?: string; output?: { type?: string; content?: { type?: string; text?: string }[] }[]; usage?: RespUsage } & RespStatus;
     reportUsage(this.onUsage, respUsage(data.usage));
     const text = typeof data.output_text === "string" && data.output_text
@@ -67,6 +73,7 @@ export class OpenAiResponsesProvider implements LlmProvider {
         ...(tools ? { tools: tools.map((t) => ({ type: "function", ...t })) } : {}),
         ...(req.jsonMode && !tools ? { text: { format: { type: "json_object" } } } : {}),
       },
+      this.http(),
     )) as { output_text?: string; output?: RespOut[]; usage?: RespUsage } & RespStatus;
     reportUsage(this.onUsage, respUsage(data.usage));
     const items = data.output ?? [];
@@ -76,7 +83,7 @@ export class OpenAiResponsesProvider implements LlmProvider {
     const toolCalls = items.flatMap((o, i) => o.type === "function_call" && o.name
       ? [{ id: o.call_id || o.id || `call_${i}`, name: o.name, args: parseToolArgs(o.arguments) }] : []);
     const truncated = isTruncated(respCut(data), tokenCount(data.usage?.output_tokens), req.maxOutputTokens);
-    if (!text && !toolCalls.length && !truncated) throw new Error("LLM response had no output text");
+    if (!text && !toolCalls.length && !truncated) this.empty();
     return {
       text, toolCalls, ...(truncated ? { truncated } : {}),
       ...(data.usage ? { usage: { input: data.usage.input_tokens ?? 0, output: data.usage.output_tokens ?? 0 } } : {}),

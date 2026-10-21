@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Config } from "./config.js";
 import { COMPACT_JSON_INSTRUCTION, resolveOutputLimit, retryOutputLimit } from "./budget.js";
+import { classifyLlmFailure, formatLlmFailure, LlmError } from "./llm/http.js";
 import { completeWithMeta, type LlmProvider } from "./llm/provider.js";
 import type { ContextPiece } from "./context.js";
 import type { Lane, PrFile } from "./types.js";
@@ -288,6 +289,7 @@ export function validateAgainstFiles(out: TriageOutput, files: PrFile[], criteri
 
 export interface TriageResult {
   llm: LlmTriage | null;
+  /** Failure class (`timeout`, `http_429`, `parse`, …). Never a provider body or model text. */
   error?: string;
   tokensEstimate: number;
   breakdown: TokenBreakdown;
@@ -327,9 +329,9 @@ export function outputLimitWarning(o: {
     ` retry=${o.retry}${o.retryLimit ? ` (limit ${o.retryLimit}, compact JSON)` : ""}`;
 }
 
-/** Repair prompt for the single retry; the reason depends on whether the reply was cut off. */
-export function retryInstruction(truncated: boolean, why: string): string {
-  const reason = truncated ? "Your previous reply was cut off at the output limit" : `Your previous reply was not valid JSON (${why})`;
+/** Repair prompt for the single retry. The parser's message is not included: it can quote the model reply. */
+export function retryInstruction(truncated: boolean): string {
+  const reason = truncated ? "Your previous reply was cut off at the output limit" : "Your previous reply was not valid JSON";
   return `REPAIR: ${reason}. ${COMPACT_JSON_INSTRUCTION} Reply with ONLY a single JSON object matching the schema. No markdown fences, no prose.`;
 }
 
@@ -343,7 +345,6 @@ export async function runTriage(
   const skipped = ctx.skippedDiffFiles ?? [];
   let raw = "";
   let retried = false;
-  let lastErr = "unknown parse error";
   const limit = resolveOutputLimit(cfg);
   let retryLimit = limit;
   let firstTruncated = false, firstOut = 0, lastTruncated = false;
@@ -361,7 +362,7 @@ export async function runTriage(
       try {
         const r = await completeWithMeta(provider, {
           system,
-          user: repair ? `${prompt}\n\n${retryInstruction(firstTruncated, lastErr)}` : prompt,
+          user: repair ? `${prompt}\n\n${retryInstruction(firstTruncated)}` : prompt,
           maxOutputTokens: repair ? retryLimit : limit,
           jsonMode: true,
         });
@@ -373,7 +374,7 @@ export async function runTriage(
           llm = validateAgainstFiles(parseTriageOutput(raw), input.files, ctx.criteria ?? []);
         } catch (pe) {
           if (!r.truncated) throw pe;
-          throw new Error(`output truncated at ${repair ? retryLimit : limit} tokens (${(pe as Error).message})`);
+          throw new LlmError("parse", { provider: provider.providerId });
         }
         const outTok = estimateTokens(raw);
         if (retried) {
@@ -382,19 +383,20 @@ export async function runTriage(
         }
         return { llm, tokensEstimate: estimateTokens(system) + diffTokens + outTok, breakdown: mkBreakdown(outTok), retried, ...(firstTruncated ? { truncated: true } : {}), outputLimit: limit };
       } catch (e) {
-        lastErr = (e as Error).message.slice(0, 160);
-        log(`LLM JSON attempt ${attempt + 1} failed: ${lastErr}`);
+        const info = classifyLlmFailure(e, provider.providerId);
+        log(`LLM JSON attempt ${attempt + 1} failed: ${formatLlmFailure(info)}`);
         if (attempt === 1) throw e;
       }
     }
-    throw new Error("unreachable");
+    throw new LlmError("parse", { provider: provider.providerId });
   } catch (e) {
+    const info = classifyLlmFailure(e, provider.providerId);
     const outTok = estimateTokens(raw);
-    log(`LLM triage falling back to rules-only after JSON failure: ${(e as Error).message.slice(0, 160)}`);
+    log(`LLM triage falling back to rules-only after JSON failure: ${formatLlmFailure(info)}`);
     if (retried) warn(outputLimitWarning({ ref: ctx.ref, model: cfg.provider.model, limit, retryLimit, outputTokens: firstOut, truncated: firstTruncated || lastTruncated, retry: "failed" }));
     return {
       llm: null,
-      error: (e as Error).message.slice(0, 200),
+      error: info.errorClass,
       tokensEstimate: estimateTokens(system) + diffTokens + outTok,
       breakdown: mkBreakdown(outTok),
       retried,

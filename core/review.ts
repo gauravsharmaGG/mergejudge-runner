@@ -21,6 +21,13 @@ import { excludeFromLlm, isMergeJudgeConfigPath } from "./rules.js";
 import { gatherContext, type ContextPiece, type ContextSource } from "./context.js";
 import { DELIM, runTriage, type Finding, type TokenBreakdown, type TriageResult } from "./triage.js";
 
+/** Rules-only note when the model call or its JSON could not be used. The class only: no provider body, no model text. */
+export function aiUnavailableNote(errorClass: string, truncated = false): string {
+  return truncated
+    ? `AI review unavailable (${errorClass}). Output was cut off at the token limit.`
+    : `AI review unavailable (${errorClass}).`;
+}
+
 /** The subset of a pull_request webhook payload the review needs. */
 export interface ReviewPr {
   number: number;
@@ -276,7 +283,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
       else {
         const skip = (p: string) => excludeFromLlm([{ path: p }], cfg.diff_exclude).skipped.length > 0;
         const prep = await prepareDeepIndex({ ...o.deep, policy: cfg.index.policy }, kept, log.info)
-          .catch((e: Error) => ({ ok: false as const, reason: `index error: ${e.message.slice(0, 120)}` }));
+          .catch(() => ({ ok: false as const, reason: "index error" }));
         if (!prep.ok) fallback(prep.reason);
         else {
           for (const n of prep.notes) log.info(`deep: ${n}`);
@@ -304,7 +311,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
       `Tokens ~${res.breakdown.total} (system ${res.breakdown.system} · policy ${res.breakdown.policy} · rubric ${res.breakdown.rubric} · diff ${res.breakdown.diff}${res.breakdown.context ? ` · context ${res.breakdown.context}` : ""}${res.breakdown.tools ? ` · tools ${res.breakdown.tools} (${res.breakdown.tool_calls} calls)` : ""} · out ${res.breakdown.output}) · mode ${mode}` +
         (res.retried ? " · JSON repair retry used" : ""),
     );
-    if (!llm) notes.push(`LLM triage failed (${res.error}${res.truncated ? `; output cut off at the ${res.outputLimit}-token limit, retry failed` : ""}); rules-only.`);
+    if (!llm) notes.push(aiUnavailableNote(res.error ?? "parse", res.truncated === true));
     else if (o.llmCache) {
       await o.llmCache.put({ llm, tokens, breakdown: res.breakdown, policiesUsed: policies.used })
         .catch((e) => log.warning(`Could not cache LLM result: ${(e as Error).message}`));

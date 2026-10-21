@@ -1,4 +1,5 @@
-import { isTruncated, openAiUsage, tokenCount, parseToolArgs, postJson, reportUsage, type UsageSink, type ChatMessage, type ChatRequest, type ChatTurn, type LlmProvider, type LlmRequest, type LlmResult } from "./provider.js";
+import { LlmError, postJson, type LlmTransport } from "./http.js";
+import { isTruncated, openAiUsage, tokenCount, parseToolArgs, reportUsage, type UsageSink, type ChatMessage, type ChatRequest, type ChatTurn, type LlmProvider, type LlmRequest, type LlmResult } from "./provider.js";
 
 type OaMessage = Record<string, unknown>;
 
@@ -26,14 +27,18 @@ const oaUsage = (u: OaUsage | undefined) => (u && typeof u === "object" ? openAi
 
 export class OpenAiProvider implements LlmProvider {
   readonly label: string;
+  readonly providerId: string;
   readonly supportsTools = true;
-  constructor(private baseUrl: string, private model: string, private apiKey: string, private onUsage?: UsageSink) {
+  constructor(private baseUrl: string, private model: string, private apiKey: string, private onUsage?: UsageSink, private transport: Partial<LlmTransport> = {}) {
     this.label = model;
+    this.providerId = transport.providerId ?? "openai";
   }
   private url() { return `${this.baseUrl.replace(/\/+$/, "")}/chat/completions`; }
+  private http(): Partial<LlmTransport> { return { ...this.transport, providerId: this.providerId }; }
+  private empty(): never { throw new LlmError("parse", { provider: this.providerId }); }
   async complete(req: LlmRequest): Promise<string> {
     const r = await this.completeEx(req);
-    if (!r.text) throw new Error("LLM response had no message content");
+    if (!r.text) this.empty();
     return r.text;
   }
   async completeEx(req: LlmRequest): Promise<LlmResult> {
@@ -50,13 +55,14 @@ export class OpenAiProvider implements LlmProvider {
           { role: "user", content: req.user },
         ],
       },
+      this.http(),
     )) as { choices?: { message?: { content?: unknown }; finish_reason?: unknown }[]; usage?: OaUsage };
     reportUsage(this.onUsage, oaUsage(data.usage));
     const content = data.choices?.[0]?.message?.content;
     const outputTokens = tokenCount(data.usage?.completion_tokens);
     const truncated = isTruncated(data.choices?.[0]?.finish_reason === "length", outputTokens, req.maxOutputTokens);
     // A reasoning model that spends the whole limit thinking returns empty content with finish_reason "length".
-    if (typeof content !== "string" && !truncated) throw new Error("LLM response had no message content");
+    if (typeof content !== "string" && !truncated) this.empty();
     return { text: typeof content === "string" ? content : "", truncated, outputTokens };
   }
   async chat(req: ChatRequest): Promise<ChatTurn> {
@@ -73,18 +79,19 @@ export class OpenAiProvider implements LlmProvider {
         // JSON mode and tools do not mix on every endpoint; it is only requested on the tool-less final turn.
         ...(req.jsonMode && !tools ? { response_format: { type: "json_object" } } : {}),
       },
+      this.http(),
     )) as {
       choices?: { finish_reason?: unknown; message?: { content?: unknown; tool_calls?: { id?: string; function?: { name?: string; arguments?: unknown } }[] } }[];
       usage?: OaUsage;
     };
     reportUsage(this.onUsage, oaUsage(data.usage));
     const msg = data.choices?.[0]?.message;
-    if (!msg) throw new Error("LLM response had no message");
+    if (!msg) this.empty();
     const toolCalls = (msg.tool_calls ?? []).flatMap((c, i) =>
       c.function?.name ? [{ id: c.id || `call_${i}`, name: c.function.name, args: parseToolArgs(c.function.arguments) }] : []);
     const text = typeof msg.content === "string" ? msg.content : "";
     const truncated = isTruncated(data.choices?.[0]?.finish_reason === "length", tokenCount(data.usage?.completion_tokens), req.maxOutputTokens);
-    if (!text && !toolCalls.length && !truncated) throw new Error("LLM response had no message content");
+    if (!text && !toolCalls.length && !truncated) this.empty();
     return {
       text, toolCalls, ...(truncated ? { truncated } : {}),
       ...(data.usage ? { usage: { input: data.usage.prompt_tokens ?? 0, output: data.usage.completion_tokens ?? 0 } } : {}),

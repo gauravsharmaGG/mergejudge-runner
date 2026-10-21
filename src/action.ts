@@ -6,23 +6,36 @@ import { applyProviderOverrides, parseConfig, type Config } from "../core/config
 import { fetchBaseConfig, type Octokit, type Repo } from "../core/github.js";
 import { runFeedback, runPropose, type FeedbackPayload } from "../core/learnflow.js";
 import { runReview, type ReviewPr } from "../core/review.js";
+import { redact, redactedLogs } from "./redact.js";
 import { retrieveFromWorkspace, WorkspaceError } from "./workspace.js";
+
+/** Secrets seen this run. Action log lines are redacted with these plus the shared token/header patterns. */
+const secretSink: string[] = [];
+function remember(value: string | undefined): void {
+  if (value && value.length >= 6 && !secretSink.includes(value)) secretSink.push(value);
+}
+function logs() {
+  return redactedLogs({ info: (m) => core.info(m), warning: (m) => core.warning(m) }, secretSink);
+}
 
 async function auth(): Promise<{ ok: Octokit; repo: Repo; appToken: boolean; botLogin: string | null; token: string }> {
   const repo = github.context.repo;
   const appId = core.getInput("app_id");
   const appKey = core.getInput("app_private_key");
   let token = core.getInput("github_token", { required: true });
+  remember(token);
+  remember(appKey);
   let appToken = false;
   let botLogin: string | null = null;
   if (appId && appKey) {
     try {
       token = await installationToken(appId, appKey, repo.owner, repo.repo, { apiUrl: process.env.GITHUB_API_URL });
+      remember(token);
       core.setSecret(token);
       appToken = true;
-      core.info("Using GitHub App installation token.");
+      logs().info("Using GitHub App installation token.");
     } catch (e) {
-      core.warning(`GitHub App token failed (${(e as Error).message}); falling back to github_token.`);
+      logs().warning(`GitHub App token failed (${(e as Error).message}); falling back to github_token.`);
     }
   }
   const ok = github.getOctokit(token);
@@ -37,21 +50,23 @@ async function auth(): Promise<{ ok: Octokit; repo: Repo; appToken: boolean; bot
 
 async function loadCfg(ok: Octokit, repo: Repo, base: { ref?: string; sha?: string }): Promise<{ cfg: Config; cfgRef: string }> {
   const cfgPath = core.getInput("config_path") || ".mergejudge.yml";
-  const { text, ref: cfgRef } = await fetchBaseConfig(ok, repo, cfgPath, base, core.warning);
-  core.info(`Config ${cfgPath} read from base ${cfgRef}.`);
+  const log = logs();
+  const { text, ref: cfgRef } = await fetchBaseConfig(ok, repo, cfgPath, base, log.warning);
+  log.info(`Config ${cfgPath} read from base ${cfgRef}.`);
   const cfg = applyProviderOverrides(parseConfig(text), {
     type: core.getInput("provider"),
     base_url: core.getInput("base_url"),
     model: core.getInput("model"),
     api_key_env: core.getInput("api_key_env"),
   });
-  if (text === null) core.info(`No ${cfgPath} on base; using defaults.`);
+  if (text === null) log.info(`No ${cfgPath} on base; using defaults.`);
   return { cfg, cfgRef };
 }
 
 async function runTriageMode(): Promise<void> {
   const pr = github.context.payload.pull_request;
-  if (!pr) { core.info("Not a pull_request event; nothing to do."); return; }
+  const log = logs();
+  if (!pr) { log.info("Not a pull_request event; nothing to do."); return; }
   const { ok, repo, appToken, botLogin } = await auth();
   const { cfg, cfgRef } = await loadCfg(ok, repo, { ref: pr.base?.ref, sha: pr.base?.sha });
   const lane = await runReview({
@@ -61,9 +76,9 @@ async function runTriageMode(): Promise<void> {
     retrieveDeep: async (kept) => {
       const dir = process.env.GITHUB_WORKSPACE;
       if (!dir) throw new WorkspaceError("GITHUB_WORKSPACE is not set");
-      return retrieveFromWorkspace(dir, kept, cfg, `${repo.owner}/${repo.repo}`, core.info);
+      return retrieveFromWorkspace(dir, kept, cfg, `${repo.owner}/${repo.repo}`, log.info);
     },
-    log: { info: core.info, warning: core.warning },
+    log,
   });
   core.setOutput("lane", lane);
 }
@@ -74,7 +89,7 @@ async function runFeedbackMode(): Promise<void> {
   await runFeedback({
     ok, repo, payload: github.context.payload as FeedbackPayload, defaultBranch,
     loadConfig: async () => (await loadCfg(ok, repo, { ref: defaultBranch })).cfg,
-    log: { info: core.info, warning: core.warning },
+    log: logs(),
   });
 }
 
@@ -82,7 +97,7 @@ async function runProposeMode(): Promise<void> {
   const { ok, repo } = await auth();
   const defaultBranch = github.context.payload.repository?.default_branch ?? "main";
   const { cfg } = await loadCfg(ok, repo, { ref: defaultBranch });
-  const pr = await runPropose({ ok, repo, cfg, defaultBranch, log: { info: core.info, warning: core.warning } });
+  const pr = await runPropose({ ok, repo, cfg, defaultBranch, log: logs() });
   if (pr) core.setOutput("proposal_pr", String(pr));
 }
 
@@ -95,10 +110,10 @@ async function run(): Promise<void> {
     else if (event === "schedule" || event === "workflow_dispatch") mode = "propose";
     else mode = "triage";
   }
-  core.info(`MergeJudge mode=${mode} event=${event}`);
+  logs().info(`MergeJudge mode=${mode} event=${event}`);
   if (mode === "feedback") await runFeedbackMode();
   else if (mode === "propose") await runProposeMode();
   else await runTriageMode();
 }
 
-run().catch((e) => core.setFailed(e instanceof Error ? e.message : String(e)));
+run().catch((e) => core.setFailed(redact(e instanceof Error ? e.message : String(e), secretSink)));

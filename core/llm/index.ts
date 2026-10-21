@@ -1,5 +1,6 @@
 import type { ProviderConfig } from "../config.js";
 import { AnthropicProvider } from "./anthropic.js";
+import { llmTransportFromConfig } from "./http.js";
 import { OpenAiProvider } from "./openai.js";
 import type { LlmProvider, LlmUsage } from "./provider.js";
 import { OpenAiResponsesProvider } from "./responses.js";
@@ -70,9 +71,10 @@ export function createProvider(
   if (!cfg.model) return { provider: null, note: "provider.model not set" };
   const model = cfg.model;
   const onUsage = bindings.onCall ? (usage: LlmUsage | null) => bindings.onCall!({ provider: priceProvider(cfg), model, usage }) : undefined;
+  const transport = llmTransportFromConfig(cfg, env);
   if (cfg.type === "workers-ai") {
     if (!bindings.ai) return { provider: null, note: "Workers AI binding `AI` not available (Worker runtime only)" };
-    return { provider: new WorkersAiProvider(bindings.ai, model, onUsage) };
+    return { provider: new WorkersAiProvider(bindings.ai, model, onUsage, transport) };
   }
   const keyEnv = providerKeyEnv(cfg);
   const key = env[keyEnv];
@@ -80,14 +82,14 @@ export function createProvider(
   const base = providerBaseUrl(cfg);
   switch (cfg.type) {
     case "anthropic":
-      return { provider: new AnthropicProvider(base, model, key, onUsage) };
+      return { provider: new AnthropicProvider(base, model, key, onUsage, transport) };
     case "openai":
       return cfg.api === "responses"
-        ? { provider: new OpenAiResponsesProvider(base, model, key, onUsage) }
-        : { provider: new OpenAiProvider(base, model, key, onUsage) };
+        ? { provider: new OpenAiResponsesProvider(base, model, key, onUsage, transport) }
+        : { provider: new OpenAiProvider(base, model, key, onUsage, transport) };
     case "openai-compatible":
     case "zai":
-      return { provider: new OpenAiProvider(base, model, key, onUsage) };
+      return { provider: new OpenAiProvider(base, model, key, onUsage, transport) };
     default: {
       const unhandled: never = cfg.type;
       throw new Error(`createProvider: no adapter for provider.type ${String(unhandled)}`);

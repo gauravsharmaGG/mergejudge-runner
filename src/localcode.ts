@@ -92,12 +92,8 @@ export function remoteUrl(template: string, owner: string, repo: string): string
 
 const ACCESS_RE = /could not read from remote|does not appear to be a git repository|authentication failed|could not read (username|password)|permission denied|repository not found|access denied|403|401|terminal prompts disabled|invalid credentials|not found/i;
 
-function accessMessage(owner: string, repo: string, url: string, e: GitError): string {
-  const detail = e.stderr.trim().split("\n").filter(Boolean).slice(-2).join(" ").slice(0, 200);
-  if (ACCESS_RE.test(e.stderr)) {
-    return `cannot read ${owner}/${repo} with this runner's own git access (${scrubUrl(url)}). Sign this machine in to GitHub for that repository (credential helper, \`gh auth setup-git\`, a deploy key or SSH remote via MERGEJUDGE_REMOTE_URL_TEMPLATE). Git said: ${detail}`;
-  }
-  return `git could not fetch ${owner}/${repo} from ${scrubUrl(url)}: ${detail || e.message}`;
+function accessMessage(owner: string, repo: string, url: string): string {
+  return `cannot read ${owner}/${repo} with this runner's own git access (${scrubUrl(url)}). Sign this machine in to GitHub for that repository (credential helper, \`gh auth setup-git\`, a deploy key or SSH remote via MERGEJUDGE_REMOTE_URL_TEMPLATE).`;
 }
 
 const gitDirOf = (o: LocalCodeOptions, key: string) => join(o.paths.repos, `${key}.git`);
@@ -114,7 +110,7 @@ async function ensureClone(o: LocalCodeOptions, owner: string, repo: string, sig
   try { await runGit(["clone", "--bare", "--filter=blob:none", "--no-tags", "--quiet", "--", url, dir], { env: o.env, signal }); }
   catch (e) {
     rmSync(dir, { recursive: true, force: true });
-    if (e instanceof GitError) throw new LocalCodeError(accessMessage(owner, repo, url, e));
+    if (e instanceof GitError) throw new LocalCodeError(ACCESS_RE.test(e.stderr) ? accessMessage(owner, repo, url) : `git could not fetch ${owner}/${repo} from ${scrubUrl(url)} (${e.message})`);
     throw e;
   }
   return dir;
@@ -137,7 +133,7 @@ async function fetchCommits(o: LocalCodeOptions, dir: string, owner: string, rep
       const still: string[] = [];
       for (const sha of missing) if (!(await hasCommit(dir, sha, o.env))) still.push(sha);
       if (still.length) {
-        if (e instanceof GitError) throw new LocalCodeError(ACCESS_RE.test(e.stderr) ? accessMessage(owner, repo, url, e) : `commit ${still[0]!.slice(0, 7)} is not available from ${scrubUrl(url)} (force-pushed away or not reachable): ${e.stderr.trim().slice(-160)}`);
+        if (e instanceof GitError) throw new LocalCodeError(ACCESS_RE.test(e.stderr) ? accessMessage(owner, repo, url) : `commit ${still[0]!.slice(0, 7)} is not available from ${scrubUrl(url)} (force-pushed away or not reachable)`);
         throw e;
       }
     }
