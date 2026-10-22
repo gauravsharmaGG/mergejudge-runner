@@ -10,6 +10,16 @@
 
 Docs: **[mergejudge.si](https://mergejudge.si)** · [GitHub Action guide](https://mergejudge.si/guide/github-action) · [Config reference](https://mergejudge.si/guide/config)
 
+## See it on real PRs
+
+Real MergeJudge reviews on a public demo repo, no install needed:
+
+- `auto` (docs typo fix): https://github.com/gauravsharmaGG/mergejudge-demo/pull/2
+- `review` (change to a workflow file, a protected path): https://github.com/gauravsharmaGG/mergejudge-demo/pull/3
+- `block` (hard-coded API key): https://github.com/gauravsharmaGG/mergejudge-demo/pull/4
+
+Auto means low risk, not a guarantee. Your branch protection and required checks still apply, and MergeJudge doesn't merge pull requests itself.
+
 ## Quick start
 
 1. Add your AI key as a repository secret, for example `MJ_API_KEY` (Settings → Secrets and variables → Actions). Skip this for rules-only.
@@ -58,11 +68,11 @@ The runner is not standalone: it connects to the MergeJudge service and needs th
 
 ## Privacy: what MergeJudge's servers see
 
-**With deep-local mode** (`review.mode: deep` and `runner.code_source: local`, see below), the AI review runs on your machine with your own AI login and reads your code from your own git clone. MergeJudge's servers never receive your repository's files. They read the pull request's diff from GitHub only to run the rules check, and keep only the review result: the lane, the reasons, the summary and the findings. Findings can quote short lines of code; this is the same text that's posted on your pull request.
+**With deep-local mode** (`review.mode: deep` and `runner.code_source: local`, see below), the AI review runs on your machine with your own AI login and reads your code from your own git clone. The AI step and code index run on your machine. Our servers still read the pull request diff from GitHub to run the rule checks, and don't store it. They keep only the review result: the lane, the reasons, the summary and the findings. Findings can quote short lines of code. This is the same text that's posted on your pull request.
 
-**In the default diff and context modes**, the hosted service passes the PR diff, your policy files and related code snippets to your runner through its job queue, so they're stored on MergeJudge's servers. Choose deep-local to keep your code off our servers.
+**In the default diff and context modes**, the hosted service passes the PR diff, your policy files and related code snippets to your runner through its job queue, so they are held on our servers until the review finishes, and deleted within about 48 hours at the latest. Choose deep-local (`review.mode: deep` and `runner.code_source: local`) to run the AI step and code index on your machine instead. When AI review is on, your code is sent to your own AI provider under your own account.
 
-In every mode, your code is sent to **your own AI provider** under your own account (Claude Code, Codex or GLM), not through MergeJudge.
+Details: https://mergejudge.si/privacy
 
 ## GitHub Action
 
@@ -117,7 +127,7 @@ No `actions/checkout` step is needed for the default modes (add one for deep mod
 - **Inputs.** `github_token` (defaults to the workflow token), `app_id` / `app_private_key` (optional GitHub App credentials), `mode` (`auto` | `triage` | `feedback` | `propose`), `config_path`, `provider`, `base_url`, `model`, `api_key_env`. Outputs: `lane`, `proposal_pr`.
 - **Config changes.** Changes to `.mergejudge.yml` always go to review, and are never auto-merged or bot-approved.
 - **Modes.** `auto` (default) picks from the event: `pull_request` → triage, `issue_comment` → feedback, `schedule` / `workflow_dispatch` → propose. All three modes are available in this Action.
-- **Deep mode (`review.mode: deep`).** Add an `actions/checkout` step before MergeJudge. The Action then indexes the checked-out files in memory (for this run only), finds what the changed code touches (importers, imports, callers, files that mention changed names, strings and env var names, two hops out) and sends those snippets to your AI provider next to the diff, in a single pass (no tool calls). Nothing goes to any MergeJudge server: with the Action everything runs on your GitHub runner and the code goes to the provider you chose with your own key. Without a usable checkout (no `actions/checkout` step, an empty workspace) it falls back to context mode (files read through the GitHub API) and the review says so. With `provider: none` there is no AI step at all. Limits: tracked files only; `.env`, key files, lockfiles, `node_modules`, binaries and files over 1 MB are never read; symlinks are never followed; at most 5,000 files / 50 MB / 2 minutes are indexed (a partial index is reported). The config and policy files are still read from the PR base, not from the checkout.
+- **Deep mode (`review.mode: deep`).** Add an `actions/checkout` step before MergeJudge. The Action then indexes the checked-out files in memory (for this run only), finds what the changed code touches (importers, imports, callers, files that mention changed names, strings and env var names, two hops out) and sends those snippets to your AI provider next to the diff, in a single pass (no tool calls). Nothing goes to any MergeJudge server: with the Action everything runs on your GitHub runner and the code goes to the provider you chose with your own key. Without a usable checkout (no `actions/checkout` step, an empty workspace) it falls back to context mode (files read through the GitHub API) and the review says so. With `provider: none` there is no AI step at all. Limits: tracked files only; `.env`, key files, lockfiles, `node_modules`, binaries and files over 100 KB are never read; symlinks are never followed; at most 5,000 files / 50 MB / 2 minutes are indexed (a partial index is reported). The config and policy files are still read from the PR base, not from the checkout.
 
   ```yaml
   steps:
@@ -191,7 +201,7 @@ mergejudge-runner run --concurrency 2 # capped by the concurrency registered wit
 - The access token is rotated through `/token/rotate` when it has < 14 days left (or when a response carries an `x-mergejudge-rotate` header). The new token is written to the config file (atomic rename) **before** it is used.
 - Modes: `diff`, `context` and `deep`. **Deep on a runner is a single pass**: the Worker builds a temporary index of the repo (the index is not stored, no hosted AI), looks up callers, importers and imports of the changed code (two hops out, hop 1 first), plus files that reference strings, object keys and env var names the diff changed or removed, and sends them as context with the job. The engine still runs with no tools and no checkout, so it cannot browse further. The temporary index is read most-related-first: the changed files, then their imports and the files in the same directories that import them, then the other files in those directories, then the parent directories, then files that mention the changed names, strings or env var names, then everything else. If the repo is too big to index in full (size, file or time limit), the review uses the partial index and says so ("Deep: used a partial index (N files, most related first; size limit reached)."). It falls back to `context` and says so only when almost nothing related could be indexed: fewer than 3 files from those first stages, or none of the changed files that already exist could be indexed. Runners older than 0.3.0 do not advertise `deep`, so they are never offered such jobs; upgrade and restart to receive them. With `runner.code_source: local` the runner reads its own clone instead; see below.
 
-## Local code (deep-local: keeps your code off MergeJudge's servers) — runner 0.4.0
+## Local code (deep-local: the AI step and code index run on your machine) — runner 0.4.0
 
 By default (`runner.code_source: worker`) the Worker reads the repo through the GitHub API and sends the diff and context with the job. With `code_source: local` in the repo's `.mergejudge.yml` (read from the base commit):
 
