@@ -78,3 +78,35 @@ describe("AI failure text", () => {
     expect(aiUnavailableNote("http_429")).not.toContain(SECRET);
   });
 });
+
+describe("deep mode time cap", () => {
+  it("caps each model call to the time left until deep.max_seconds + DEEP_FINISH_MS", async () => {
+    const { runDeepTriage, DEEP_FINISH_MS } = await import("../core/deep.js");
+    let t = 0;
+    const budgets: (number | undefined)[] = [];
+    const answer = JSON.stringify({ summary: "ok", files: [{ path: "a.ts", lane: "review", reason: "logic", findings: [] }] });
+    const chatProvider = {
+      label: "gpt-test", providerId: "openai", supportsTools: true as const,
+      complete: async () => answer,
+      chat: async (req: { budgetMs?: number; tools?: unknown[] }) => {
+        budgets.push(req.budgetMs);
+        if (req.tools?.length) {
+          t += 100_000; // a slow tool round
+          return { text: "", toolCalls: [{ id: String(budgets.length), name: "read_file", args: { path: "a.ts" } }] };
+        }
+        return { text: answer, toolCalls: [] };
+      },
+    };
+    const res = await runDeepTriage(chatProvider, { title: "t", body: "", files: [file] }, cfg, {}, {
+      tools: { defs: [{ name: "read_file", description: "read", parameters: {} }], run: async () => "x" },
+      now: () => t,
+    });
+    expect(res.llm?.summary).toBe("ok");
+    const hard = cfg.deep.max_seconds * 1000 + DEEP_FINISH_MS;
+    expect(budgets[0]).toBe(hard);
+    expect(budgets[1]).toBe(hard - 100_000);
+    // tool use stops at max_seconds (120s), then the final answer gets what is left
+    expect(budgets.at(-1)).toBe(hard - 200_000);
+    expect(cfg.deep.max_seconds * 1000 + DEEP_FINISH_MS).toBeLessThanOrEqual(10 * 60_000);
+  });
+});

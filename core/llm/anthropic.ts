@@ -1,4 +1,4 @@
-import { LlmError, postJson, type LlmTransport } from "./http.js";
+import { LlmError, postJson, withCallBudget, type LlmTransport } from "./http.js";
 import { isTruncated, reportUsage, tokenCount, type UsageSink, type LlmUsage, type ChatMessage, type ChatRequest, type ChatTurn, type LlmProvider, type LlmRequest, type LlmResult } from "./provider.js";
 
 type Block = Record<string, unknown>;
@@ -41,7 +41,7 @@ export class AnthropicProvider implements LlmProvider {
   }
   private url() { return `${this.baseUrl.replace(/\/+$/, "")}/v1/messages`; }
   private headers() { return { "x-api-key": this.apiKey, "anthropic-version": "2023-06-01" }; }
-  private http(): Partial<LlmTransport> { return { ...this.transport, providerId: this.providerId }; }
+  private http(budgetMs?: number): Partial<LlmTransport> { return withCallBudget({ ...this.transport, providerId: this.providerId }, budgetMs); }
   private empty(): never { throw new LlmError("parse", { provider: this.providerId }); }
   async complete(req: LlmRequest): Promise<string> {
     const r = await this.completeEx(req);
@@ -81,7 +81,7 @@ export class AnthropicProvider implements LlmProvider {
           ? { tools: req.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })) }
           : {}),
       },
-      this.http(),
+      this.http(req.budgetMs),
     )) as {
       content?: { type: string; text?: string; id?: string; name?: string; input?: unknown }[];
       usage?: AnthropicUsage;

@@ -1,4 +1,4 @@
-import { LlmError, postJson, type LlmTransport } from "./http.js";
+import { LlmError, postJson, withCallBudget, type LlmTransport } from "./http.js";
 import { isTruncated, openAiUsage, tokenCount, parseToolArgs, reportUsage, type UsageSink, type ChatMessage, type ChatRequest, type ChatTurn, type LlmProvider, type LlmRequest, type LlmResult } from "./provider.js";
 
 /** Responses API input items for a tool conversation (stateless: the full history is re-sent). */
@@ -32,7 +32,7 @@ export class OpenAiResponsesProvider implements LlmProvider {
     this.providerId = transport.providerId ?? "openai";
   }
   private url() { return `${this.baseUrl.replace(/\/+$/, "")}/responses`; }
-  private http(): Partial<LlmTransport> { return { ...this.transport, providerId: this.providerId }; }
+  private http(budgetMs?: number): Partial<LlmTransport> { return withCallBudget({ ...this.transport, providerId: this.providerId }, budgetMs); }
   private empty(): never { throw new LlmError("parse", { provider: this.providerId }); }
   async complete(req: LlmRequest): Promise<string> {
     const r = await this.completeEx(req);
@@ -73,7 +73,7 @@ export class OpenAiResponsesProvider implements LlmProvider {
         ...(tools ? { tools: tools.map((t) => ({ type: "function", ...t })) } : {}),
         ...(req.jsonMode && !tools ? { text: { format: { type: "json_object" } } } : {}),
       },
-      this.http(),
+      this.http(req.budgetMs),
     )) as { output_text?: string; output?: RespOut[]; usage?: RespUsage } & RespStatus;
     reportUsage(this.onUsage, respUsage(data.usage));
     const items = data.output ?? [];

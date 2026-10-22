@@ -68,6 +68,8 @@ export interface ChatRequest {
   tools?: ToolDef[];
   maxOutputTokens: number;
   jsonMode?: boolean;
+  /** Upper bound in ms for this call, retries included (deep mode's remaining time). Lowers, never raises, the provider budget. */
+  budgetMs?: number;
 }
 
 export interface ChatTurn {

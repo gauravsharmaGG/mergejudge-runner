@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseConfig } from "../core/config.js";
 import {
-  classifyLlmFailure, formatLlmFailure, llmTransportFromConfig, LlmError, LLM_HTTP_DEFAULTS, parseRetryAfterMs, postJson, retryDelayMs,
+  classifyLlmFailure, formatLlmFailure, llmTransportFromConfig, LlmError, LLM_HTTP_DEFAULTS, parseRetryAfterMs, postJson, retryDelayMs, withCallBudget,
 } from "../core/llm/http.js";
 import { WorkersAiProvider, type WorkersAiBinding } from "../core/llm/workersai.js";
 
@@ -18,8 +18,10 @@ describe("llm transport config", () => {
     expect(defaults.maxRetries).toBe(LLM_HTTP_DEFAULTS.maxRetries);
     expect(defaults.budgetMs).toBe(LLM_HTTP_DEFAULTS.budgetMs);
     expect(defaults.maxDelayMs).toBe(LLM_HTTP_DEFAULTS.maxDelayMs);
-    expect(defaults.budgetMs).toBeLessThanOrEqual(120_000);
-    expect(defaults.timeoutMs * (defaults.maxRetries + 1)).toBeGreaterThan(defaults.budgetMs);
+    expect(defaults).toMatchObject({ timeoutMs: 120_000, maxRetries: 2, maxTimeoutRetries: 1, budgetMs: 240_000 });
+    expect(defaults.budgetMs).toBeLessThanOrEqual(300_000);
+    // one retry after a timeout fits in the call budget
+    expect(defaults.timeoutMs * (defaults.maxTimeoutRetries + 1)).toBeLessThanOrEqual(defaults.budgetMs);
 
     const cfg = parseConfig("provider:\n  type: openai\n  model: m\n  timeout_ms: 5000\n  max_retries: 1\n  budget_ms: 20000\n  max_delay_ms: 1500\n").provider;
     expect(llmTransportFromConfig(cfg, {}).timeoutMs).toBe(5000);
@@ -27,12 +29,18 @@ describe("llm transport config", () => {
     expect(llmTransportFromConfig(cfg, { MERGEJUDGE_LLM_TIMEOUT_MS: "8000" }).timeoutMs).toBe(8000);
     expect(llmTransportFromConfig(cfg, { MERGEJUDGE_LLM_TIMEOUT_MS: "nope" }).timeoutMs).toBe(5000);
     expect(llmTransportFromConfig(cfg, { MERGEJUDGE_LLM_TIMEOUT_MS: "90000" }).timeoutMs).toBe(20_000);
-    expect(llmTransportFromConfig(cfg, { MERGEJUDGE_LLM_BUDGET_MS: "999999" }).budgetMs).toBe(120_000);
+    expect(llmTransportFromConfig(cfg, { MERGEJUDGE_LLM_BUDGET_MS: "999999" }).budgetMs).toBe(300_000);
+    expect(llmTransportFromConfig(cfg, { MERGEJUDGE_LLM_TIMEOUT_MS: "999999", MERGEJUDGE_LLM_BUDGET_MS: "999999" }).timeoutMs).toBe(180_000);
+    expect(llmTransportFromConfig(cfg, { MERGEJUDGE_LLM_MAX_TIMEOUT_RETRIES: "0" }).maxTimeoutRetries).toBe(0);
+    const big = parseConfig("provider:\n  type: openai\n  model: m\n  timeout_ms: 180000\n  max_timeout_retries: 2\n  budget_ms: 300000\n").provider;
+    expect(llmTransportFromConfig(big, {})).toMatchObject({ timeoutMs: 180_000, maxTimeoutRetries: 2, budgetMs: 300_000 });
     expect(llmTransportFromConfig(cfg, { MERGEJUDGE_LLM_MAX_RETRIES: "0" }).maxRetries).toBe(0);
   });
 
   it("rejects a timeout outside the schema range", () => {
     expect(() => parseConfig("provider:\n  type: openai\n  model: m\n  timeout_ms: 10\n")).toThrow(/timeout_ms/);
+    expect(() => parseConfig("provider:\n  type: openai\n  model: m\n  timeout_ms: 180001\n")).toThrow(/timeout_ms/);
+    expect(() => parseConfig("provider:\n  type: openai\n  model: m\n  budget_ms: 300001\n")).toThrow(/budget_ms/);
   });
 });
 
@@ -134,7 +142,49 @@ describe("postJson", () => {
     expect(err.errorClass).toBe("timeout");
     expect(err.provider).toBe("anthropic");
     expect(err.message).not.toContain(SECRET);
+    expect(calls).toBe(2); // one retry after a timeout, even with maxRetries 2
+  });
+
+  it("allows more timeout retries when configured", async () => {
+    let calls = 0;
+    const fetchImpl: typeof fetch = (_url, init) => new Promise((_resolve, reject) => {
+      calls++;
+      init?.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+    });
+    const err = await postJson("https://example.test/v1", {}, {}, {
+      providerId: "openai", timeoutMs: 20, maxRetries: 2, maxTimeoutRetries: 2, budgetMs: 500, backoffMs: 0, maxDelayMs: 0,
+      fetchImpl, sleep: async () => {},
+    }).catch((e: unknown) => e);
+    expect(err).toMatchObject({ errorClass: "timeout" });
     expect(calls).toBe(3);
+  });
+
+  it("still retries HTTP 408 and 5xx twice; a timeout counts toward both limits", async () => {
+    let calls = 0;
+    const fetch408: typeof fetch = async () => { calls++; return jsonResponse(408, SECRET); };
+    const e408 = await postJson("https://example.test/v1", {}, {}, { ...fast, maxRetries: 2, backoffMs: 0, maxDelayMs: 0, fetchImpl: fetch408, sleep: async () => {} }).catch((e: unknown) => e);
+    expect(e408).toMatchObject({ errorClass: "timeout", status: 408 });
+    expect(calls).toBe(3);
+
+    calls = 0;
+    const mixed: typeof fetch = (_url, init) => {
+      calls++;
+      if (calls === 1) return new Promise((_r, reject) => init?.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }))));
+      if (calls === 2) return Promise.resolve(jsonResponse(503, SECRET));
+      return Promise.resolve(jsonResponse(200, JSON.stringify({ ok: true })));
+    };
+    const ok = await postJson("https://example.test/v1", {}, {}, {
+      providerId: "openai", timeoutMs: 20, maxRetries: 2, budgetMs: 2_000, backoffMs: 0, maxDelayMs: 0, fetchImpl: mixed, sleep: async () => {},
+    });
+    expect(ok).toEqual({ ok: true });
+    expect(calls).toBe(3);
+  });
+
+  it("lowers, never raises, the call budget for one request", () => {
+    expect(withCallBudget({ budgetMs: 240_000 }, 50_000).budgetMs).toBe(50_000);
+    expect(withCallBudget({ budgetMs: 240_000 }, 900_000).budgetMs).toBe(240_000);
+    expect(withCallBudget({}, 10).budgetMs).toBe(10);
+    expect(withCallBudget({ budgetMs: 240_000 }, undefined).budgetMs).toBe(240_000);
   });
 
   it("retries a network error and does not keep the client message", async () => {

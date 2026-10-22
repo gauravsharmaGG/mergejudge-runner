@@ -5,26 +5,30 @@
  * 4xx auth and validation responses are not retried. Failure bodies are never read and never attached
  * to the error: logs and PR comments get the class, provider id and status only.
  *
- * Defaults keep one call, including retries and waits, to about 70s. A diff review makes one or two
- * calls; deep mode is also bounded by `deep.max_seconds` (120s default, 600s max). That stays inside
- * the runner's 10-minute job and a Worker invocation. Raise `provider.timeout_ms` / `budget_ms` for a
- * slow reasoning model. Schema caps are 90s per attempt and 120s for the whole call.
+ * Defaults: 120s per attempt, at most 1 retry after an attempt times out, up to 2 retries for network
+ * errors, HTTP 408, 429 and 5xx, and 240s for one call including retries and waits. A diff review makes
+ * one or two calls. Deep mode stops tool use at `deep.max_seconds` (120s default) and caps every model
+ * call so the whole deep loop ends within `deep.max_seconds` + DEEP_FINISH_MS (240s): 6 minutes by default,
+ * inside the runner's 10-minute job and a Worker invocation. Schema caps are 180s per attempt and 300s
+ * for the whole call.
  */
 
 export const LLM_HTTP_DEFAULTS = {
-  timeoutMs: 30_000,
+  timeoutMs: 120_000,
   maxRetries: 2,
+  maxTimeoutRetries: 1,
   backoffMs: 200,
   maxDelayMs: 4_000,
-  budgetMs: 70_000,
+  budgetMs: 240_000,
 } as const;
 
 export const LLM_HTTP_LIMITS = {
-  timeoutMs: [1_000, 90_000],
+  timeoutMs: [1_000, 180_000],
   maxRetries: [0, 4],
+  maxTimeoutRetries: [0, 4],
   backoffMs: [0, 5_000],
   maxDelayMs: [0, 10_000],
-  budgetMs: [1_000, 120_000],
+  budgetMs: [1_000, 300_000],
 } as const;
 
 export type LlmErrorClass = "timeout" | "network" | "http_429" | "http_5xx" | "http_4xx" | "parse" | "schema";
@@ -66,6 +70,11 @@ export function httpErrorClass(status: number): LlmErrorClass {
   return "http_4xx";
 }
 
+/** Our own per-attempt abort fired (not an HTTP 408 from the provider). Limited by `maxTimeoutRetries`. */
+export function isAttemptTimeout(e: LlmError): boolean {
+  return e.errorClass === "timeout" && e.status === undefined;
+}
+
 export function isRetryableLlmError(e: LlmError): boolean {
   return e.errorClass === "timeout" || e.errorClass === "network" || e.errorClass === "http_429" || e.errorClass === "http_5xx";
 }
@@ -73,7 +82,10 @@ export function isRetryableLlmError(e: LlmError): boolean {
 export interface LlmTransport {
   providerId: string;
   timeoutMs: number;
+  /** Retries for network errors, HTTP 408, 429 and 5xx (and the cap on all retries). */
   maxRetries: number;
+  /** Retries after an attempt hit `timeoutMs`. Counted inside `maxRetries`. */
+  maxTimeoutRetries: number;
   backoffMs: number;
   maxDelayMs: number;
   budgetMs: number;
@@ -88,6 +100,7 @@ export interface ProviderHttpConfig {
   type?: string;
   timeout_ms?: number;
   max_retries?: number;
+  max_timeout_retries?: number;
   budget_ms?: number;
   max_delay_ms?: number;
 }
@@ -95,6 +108,7 @@ export interface ProviderHttpConfig {
 const ENV_KEYS = {
   timeoutMs: "MERGEJUDGE_LLM_TIMEOUT_MS",
   maxRetries: "MERGEJUDGE_LLM_MAX_RETRIES",
+  maxTimeoutRetries: "MERGEJUDGE_LLM_MAX_TIMEOUT_RETRIES",
   budgetMs: "MERGEJUDGE_LLM_BUDGET_MS",
   maxDelayMs: "MERGEJUDGE_LLM_MAX_DELAY_MS",
 } as const;
@@ -124,6 +138,7 @@ export function llmTransportFromConfig(cfg: ProviderHttpConfig, env: Record<stri
     providerId: cfg.type && cfg.type !== "none" ? cfg.type : "llm",
     timeoutMs,
     maxRetries: pickInt(env[ENV_KEYS.maxRetries], cfg.max_retries, LLM_HTTP_DEFAULTS.maxRetries, LLM_HTTP_LIMITS.maxRetries),
+    maxTimeoutRetries: pickInt(env[ENV_KEYS.maxTimeoutRetries], cfg.max_timeout_retries, LLM_HTTP_DEFAULTS.maxTimeoutRetries, LLM_HTTP_LIMITS.maxTimeoutRetries),
     backoffMs: LLM_HTTP_DEFAULTS.backoffMs,
     maxDelayMs,
     budgetMs,
@@ -190,6 +205,7 @@ function fill(partial?: Partial<LlmTransport>): LlmTransport {
     providerId: partial?.providerId ?? "llm",
     timeoutMs: Math.min(partial?.timeoutMs ?? LLM_HTTP_DEFAULTS.timeoutMs, budgetMs),
     maxRetries: partial?.maxRetries ?? LLM_HTTP_DEFAULTS.maxRetries,
+    maxTimeoutRetries: partial?.maxTimeoutRetries ?? LLM_HTTP_DEFAULTS.maxTimeoutRetries,
     backoffMs: partial?.backoffMs ?? LLM_HTTP_DEFAULTS.backoffMs,
     maxDelayMs: Math.min(partial?.maxDelayMs ?? LLM_HTTP_DEFAULTS.maxDelayMs, budgetMs),
     budgetMs,
@@ -199,6 +215,13 @@ function fill(partial?: Partial<LlmTransport>): LlmTransport {
     now: partial?.now,
     signal: partial?.signal,
   };
+}
+
+/** Lower the call budget (and the per-attempt timeout with it) to `budgetMs` when given. Never raises it. */
+export function withCallBudget(t: Partial<LlmTransport>, budgetMs?: number): Partial<LlmTransport> {
+  if (typeof budgetMs !== "number" || !Number.isFinite(budgetMs)) return t;
+  const cap = Math.max(1, Math.floor(budgetMs));
+  return { ...t, budgetMs: Math.min(t.budgetMs ?? LLM_HTTP_DEFAULTS.budgetMs, cap) };
 }
 
 async function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -260,6 +283,7 @@ export async function withLlmRetries<T>(op: (signal: AbortSignal) => Promise<T>,
   const started = now();
   const attempts = o.maxRetries + 1;
   let last: LlmError | undefined;
+  let timeoutRetries = 0;
   for (let i = 0; i < attempts; i++) {
     if (o.signal?.aborted) throw o.signal.reason ?? Object.assign(new Error("aborted"), { name: "AbortError" });
     const remaining = o.budgetMs - (now() - started);
@@ -277,6 +301,7 @@ export async function withLlmRetries<T>(op: (signal: AbortSignal) => Promise<T>,
       });
       last = err;
       if (!isRetryableLlmError(err) || i >= attempts - 1) throw err;
+      if (isAttemptTimeout(err) && timeoutRetries++ >= o.maxTimeoutRetries) throw err;
       const room = o.budgetMs - (now() - started);
       if (room <= 0) throw err;
       const delay = Math.min(retryDelayMs(i, err.retryAfterMs, { backoffMs: o.backoffMs, maxDelayMs: o.maxDelayMs, random }), room);

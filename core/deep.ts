@@ -1,7 +1,7 @@
 import type { Config } from "./config.js";
 import { chunkById, findReferences, isSensitivePath, searchSymbols, type IndexSnapshot } from "./deepindex.js";
 import { COMPACT_JSON_INSTRUCTION, resolveOutputLimit, retryOutputLimit } from "./budget.js";
-import { classifyLlmFailure, formatLlmFailure } from "./llm/http.js";
+import { classifyLlmFailure, formatLlmFailure, LlmError } from "./llm/http.js";
 import type { ChatMessage, ChatTurn, LlmProvider, ToolCall, ToolDef } from "./llm/provider.js";
 import {
   buildSystemPrompt, buildUserPrompt, codeAutoPrompt, DELIM, estimateTokens, outputLimitWarning, parseTriageOutput, retryInstruction, sanitizeUntrusted, tokenBreakdown,
@@ -122,6 +122,9 @@ export interface DeepOptions {
 const turnTokens = (m: ChatMessage): number =>
   estimateTokens(m.content + (m.role === "assistant" && m.toolCalls ? JSON.stringify(m.toolCalls) : ""));
 
+/** Time after deep.max_seconds for the call in flight, the final answer and a JSON repair (one default call budget). */
+export const DEEP_FINISH_MS = 240_000;
+
 /**
  * Run the bounded tool loop and return the same result shape as runTriage (lanes, findings, rubric).
  * Limits: deep.max_steps tool rounds, deep.max_tokens (input+output over all calls, soft by one final call)
@@ -149,9 +152,14 @@ export async function runDeepTriage(
   let retryLimit = limit;
   let lastTruncated = false, lastOut = 0, firstTruncated = false, firstOut = 0;
 
+  // Hard stop for the whole loop: tool use ends at deep.max_seconds, and every model call (including the
+  // final answer and a JSON repair) is capped to the time left until max_seconds + DEEP_FINISH_MS.
+  const hardStop = started + cfg.deep.max_seconds * 1000 + DEEP_FINISH_MS;
   const turn = async (tools: ToolDef[] | undefined, jsonMode: boolean, maxOutputTokens = limit): Promise<ChatTurn> => {
     const inEst = sysTok + messages.reduce((n, m) => n + turnTokens(m), 0);
-    const t = await provider.chat({ system, messages, tools, maxOutputTokens, jsonMode });
+    const left = hardStop - now();
+    if (left < 1) throw new LlmError("timeout", { provider: provider.providerId });
+    const t = await provider.chat({ system, messages, tools, maxOutputTokens, jsonMode, budgetMs: left });
     modelCalls++;
     const o = t.usage?.output ?? estimateTokens(t.text + JSON.stringify(t.toolCalls));
     used += (t.usage?.input ?? inEst) + o;

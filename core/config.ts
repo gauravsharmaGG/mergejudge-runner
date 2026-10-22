@@ -40,18 +40,20 @@ const providerSchema = z
     model: z.string().optional(),
     api_key_env: z.string().optional(),
     /**
-     * Model-call time limits. One call, including retries, stays within `budget_ms` (default 70s) so a review
-     * fits the runner's 10-minute job and a Worker invocation. `timeout_ms` aborts a single attempt.
-     * Retries (network, timeout, 429, 5xx only) wait at most `max_delay_ms`, including a Retry-After header.
-     * Env MERGEJUDGE_LLM_TIMEOUT_MS, MERGEJUDGE_LLM_MAX_RETRIES, MERGEJUDGE_LLM_BUDGET_MS and
-     * MERGEJUDGE_LLM_MAX_DELAY_MS override these when set to integers.
+     * Model-call time limits. One call, including retries, stays within `budget_ms` (default 240s) so a review
+     * fits the runner's 10-minute job and a Worker invocation. `timeout_ms` (default 120s) aborts a single attempt.
+     * Retries (network, 408, 429, 5xx: up to `max_retries`; an attempt that timed out: up to `max_timeout_retries`,
+     * counted inside `max_retries`) wait at most `max_delay_ms`, including a Retry-After header.
+     * Env MERGEJUDGE_LLM_TIMEOUT_MS, MERGEJUDGE_LLM_MAX_RETRIES, MERGEJUDGE_LLM_MAX_TIMEOUT_RETRIES,
+     * MERGEJUDGE_LLM_BUDGET_MS and MERGEJUDGE_LLM_MAX_DELAY_MS override these when set to integers.
      */
-    timeout_ms: z.number().int().min(1_000).max(90_000).default(30_000),
+    timeout_ms: z.number().int().min(1_000).max(180_000).default(120_000),
     max_retries: z.number().int().min(0).max(4).default(2),
-    budget_ms: z.number().int().min(1_000).max(120_000).default(70_000),
+    max_timeout_retries: z.number().int().min(0).max(4).default(1),
+    budget_ms: z.number().int().min(1_000).max(300_000).default(240_000),
     max_delay_ms: z.number().int().min(0).max(10_000).default(4_000),
   })
-  .default({ type: "none", timeout_ms: 30_000, max_retries: 2, budget_ms: 70_000, max_delay_ms: 4_000 });
+  .default({ type: "none", timeout_ms: 120_000, max_retries: 2, max_timeout_retries: 1, budget_ms: 240_000, max_delay_ms: 4_000 });
 
 const approvalSchema = z
   .object({

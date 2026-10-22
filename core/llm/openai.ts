@@ -1,4 +1,4 @@
-import { LlmError, postJson, type LlmTransport } from "./http.js";
+import { LlmError, postJson, withCallBudget, type LlmTransport } from "./http.js";
 import { isTruncated, openAiUsage, tokenCount, parseToolArgs, reportUsage, type UsageSink, type ChatMessage, type ChatRequest, type ChatTurn, type LlmProvider, type LlmRequest, type LlmResult } from "./provider.js";
 
 type OaMessage = Record<string, unknown>;
@@ -34,7 +34,7 @@ export class OpenAiProvider implements LlmProvider {
     this.providerId = transport.providerId ?? "openai";
   }
   private url() { return `${this.baseUrl.replace(/\/+$/, "")}/chat/completions`; }
-  private http(): Partial<LlmTransport> { return { ...this.transport, providerId: this.providerId }; }
+  private http(budgetMs?: number): Partial<LlmTransport> { return withCallBudget({ ...this.transport, providerId: this.providerId }, budgetMs); }
   private empty(): never { throw new LlmError("parse", { provider: this.providerId }); }
   async complete(req: LlmRequest): Promise<string> {
     const r = await this.completeEx(req);
@@ -79,7 +79,7 @@ export class OpenAiProvider implements LlmProvider {
         // JSON mode and tools do not mix on every endpoint; it is only requested on the tool-less final turn.
         ...(req.jsonMode && !tools ? { response_format: { type: "json_object" } } : {}),
       },
-      this.http(),
+      this.http(req.budgetMs),
     )) as {
       choices?: { finish_reason?: unknown; message?: { content?: unknown; tool_calls?: { id?: string; function?: { name?: string; arguments?: unknown } }[] } }[];
       usage?: OaUsage;
