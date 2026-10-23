@@ -129,7 +129,7 @@ export async function runLoop(o: RunOptions): Promise<number> {
   const engineOptions = (engine: EngineId): EngineOptions => {
     const base = { env: engEnv, killGraceMs: o.claude?.killGraceMs };
     if (engine === "codex") return { ...base, effort: cfg.engines?.codex?.effort ?? undefined, bin: o.codex?.bin ?? cfg.codexBin ?? undefined, ...(o.codex?.killGraceMs !== undefined ? { killGraceMs: o.codex.killGraceMs } : {}) };
-    return { ...base, bin: o.claude?.bin ?? cfg.claudeBin ?? undefined, ...(engine === "glm" ? { apiKey: glmKeyOf(cfg, engEnv) } : {}) };
+    return { ...base, ...(engine === "claude-code" && cfg.engines?.["claude-code"]?.effort ? { effort: cfg.engines["claude-code"].effort } : {}), bin: o.claude?.bin ?? cfg.claudeBin ?? undefined, ...(engine === "glm" ? { apiKey: glmKeyOf(cfg, engEnv) } : {}) };
   };
   // Declared at register and again here (and every 10 min), so a model added with `setup --model` reaches the Worker.
   let nextAnnounce = 0;

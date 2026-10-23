@@ -7,6 +7,7 @@ import { fetchBaseConfig, type Octokit, type Repo } from "../core/github.js";
 import { runFeedback, runPropose, type FeedbackPayload } from "../core/learnflow.js";
 import { runReview, type ReviewPr } from "../core/review.js";
 import { redact, redactedLogs } from "./redact.js";
+import { applyReviewStyleEnv } from "./style.js";
 import { retrieveFromWorkspace, WorkspaceError } from "./workspace.js";
 
 /** Secrets seen this run. Action log lines are redacted with these plus the shared token/header patterns. */
@@ -53,12 +54,13 @@ async function loadCfg(ok: Octokit, repo: Repo, base: { ref?: string; sha?: stri
   const log = logs();
   const { text, ref: cfgRef } = await fetchBaseConfig(ok, repo, cfgPath, base, log.warning);
   log.info(`Config ${cfgPath} read from base ${cfgRef}.`);
-  const cfg = applyProviderOverrides(parseConfig(text), {
+  let cfg = applyProviderOverrides(parseConfig(text), {
     type: core.getInput("provider"),
     base_url: core.getInput("base_url"),
     model: core.getInput("model"),
     api_key_env: core.getInput("api_key_env"),
   });
+  cfg = applyReviewStyleEnv(cfg, process.env, log.warning);
   if (text === null) log.info(`No ${cfgPath} on base; using defaults.`);
   return { cfg, cfgRef };
 }

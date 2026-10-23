@@ -148,8 +148,10 @@ export const configSchema = z.object({
     .object({
       /** diff = changed hunks only (default). context = + full changed files, their imports and callers. deep = + read-only repo tools backed by an index. */
       mode: z.enum(["diff", "context", "deep"]).default("diff"),
+      /** EXPERIMENTAL. triage = per-file risk triage (default). single = one review-focused prompt; every finding must sit on an added diff line. */
+      style: z.enum(["triage", "single"]).default("triage"),
     })
-    .default({ mode: "diff" }),
+    .default({ mode: "diff", style: "triage" }),
   context: z
     .object({
       max_bytes: z.number().int().positive().default(40_000),

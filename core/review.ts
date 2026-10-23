@@ -19,6 +19,7 @@ import { CHECK_NAME, EMOJI, renderComment } from "./render.js";
 import { selectCriteria } from "./rubrics.js";
 import { excludeFromLlm, isMergeJudgeConfigPath } from "./rules.js";
 import { gatherContext, type ContextPiece, type ContextSource } from "./context.js";
+import { runSingle } from "./single.js";
 import { DELIM, runTriage, type Finding, type TokenBreakdown, type TriageResult } from "./triage.js";
 
 /** Rules-only note when the model call or its JSON could not be used. The class only: no provider body, no model text. */
@@ -116,6 +117,8 @@ export interface ReviewOutcome {
   engine?: string;
   engineModel?: string | null;
   billing?: "subscription" | "api-key";
+  /** Set to "single" only when the experimental single-shot style produced the review (absent = triage). */
+  style?: "single";
 }
 
 export interface CachedTriage {
@@ -123,6 +126,8 @@ export interface CachedTriage {
   tokens: number;
   breakdown: TokenBreakdown;
   policiesUsed: Policies["used"];
+  /** Set to "single" for the experimental style; absent = triage. A cached result is only reused for the same style. */
+  style?: "single";
 }
 
 /**
@@ -231,7 +236,10 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
   let tokens = 0;
   let usedMode: "diff" | "context" | "deep" = cfg.review.mode;
   let breakdown = null as null | import("./triage.js").TokenBreakdown;
-  const cached = provider && o.llmCache ? await o.llmCache.get().catch(() => null) : null;
+  const single = cfg.review.style === "single";
+  // A cached result is only reused for the style that produced it (entries without `style` are triage).
+  const cachedAny = provider && o.llmCache ? await o.llmCache.get().catch(() => null) : null;
+  const cached = cachedAny && (cachedAny.style === "single") === single ? cachedAny : null;
   if (cached) {
     llm = cached.llm;
     tokens = cached.tokens;
@@ -256,6 +264,10 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
     let tools: ReturnType<typeof deepTools> | undefined;
     let retrievedDeep = false;
     let retrieved = mode === "deep" ? o.retrieved : undefined;
+    if (single) {
+      notes.push("Experimental single-shot review style.");
+      if (mode === "deep") notes.push("Experimental single-shot review: deep tool loop skipped.");
+    }
     if (mode === "deep" && !retrieved && o.retrieveDeep) {
       try {
         const r = await o.retrieveDeep(kept);
@@ -272,6 +284,8 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
       context = retrieved.pieces;
       retrievedDeep = retrieved.ok;
       notes.push(...retrieved.notes);
+    } else if (mode === "deep" && single) {
+      mode = "context"; // no tool loop in the single style: gather context like context mode
     } else if (mode === "deep") {
       const fallback = (why: string) => {
         mode = "context";
@@ -300,7 +314,9 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
     }
     const prompt = { title: pr.title ?? "", body: pr.body ?? "", files: kept, context };
     const tctx = { policyText: policies.text, criteria, learnedText: cfg.learning.enabled ? (o.learnedLines ? renderLearnedSection(o.learnedLines, DELIM) : buildLearnedContext({ learned: o.learned, lessons: o.lessons, outcomeStats: o.outcomeStats }, DELIM)) : "", skippedDiffFiles: skipped, ref: o.ref ?? `#${pr.number}` };
-    const res = mode === "deep" && tools && canUseTools(provider)
+    const res = single
+      ? await runSingle(provider, prompt, cfg, tctx, log.info, log.warning)
+      : mode === "deep" && tools && canUseTools(provider)
       ? await runDeepTriage(provider, prompt, cfg, tctx, { tools }, log.info, log.warning)
       : await runTriage(provider, prompt, cfg, tctx, log.info, log.warning);
     usedMode = retrievedDeep ? "deep" : mode;
@@ -313,7 +329,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
     );
     if (!llm) notes.push(aiUnavailableNote(res.error ?? "parse", res.truncated === true));
     else if (o.llmCache) {
-      await o.llmCache.put({ llm, tokens, breakdown: res.breakdown, policiesUsed: policies.used })
+      await o.llmCache.put({ llm, tokens, breakdown: res.breakdown, policiesUsed: policies.used, ...(single ? { style: "single" as const } : {}) })
         .catch((e) => log.warning(`Could not cache LLM result: ${(e as Error).message}`));
     }
   }
@@ -339,7 +355,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
     lane: agg.lane, agg, body, findings, syncInline: !!llm && !cached,
     usage: {
       lane: agg.lane, mode: llm && provider ? usedMode : "rules-only", model: provider?.label ?? null,
-      cached: !!cached, breakdown, tokens,
+      cached: !!cached, breakdown, tokens, ...(single && llm ? { style: "single" as const } : {}),
     },
   };
 }

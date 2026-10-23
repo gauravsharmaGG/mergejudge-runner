@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { engineLabel, ENGINE_BILLING, MODEL_RE, type Billing } from "../core/engines.js";
 import type { LlmProvider, LlmRequest } from "../core/llm/provider.js";
+import type { ReviewStyle } from "../core/single.js";
 
 export type EngineErrorKind = "timeout" | "cancelled" | "shutdown" | "spawn" | "exit" | "malformed" | "is_error";
 export class EngineError extends Error {
@@ -80,11 +81,17 @@ const safeEffort = (e: string): string => {
   return e;
 };
 
-export function claudeArgs(model?: string | null): string[] {
+/** Claude Code reasoning effort (`--effort <level>`). Absent = no flag (the CLI's own default). */
+export const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export const isClaudeEffort = (s: string): boolean => (CLAUDE_EFFORTS as readonly string[]).includes(s);
+
+export function claudeArgs(model?: string | null, effort?: string | null): string[] {
   const m = safeModel(model);
+  if (effort && !isClaudeEffort(effort)) throw new EngineError("spawn", `unsupported claude reasoning effort (use ${CLAUDE_EFFORTS.join(", ")})`);
   return [
     "-p", "--output-format", "json", "--no-session-persistence", "--disable-slash-commands",
     ...(m ? ["--model", m] : []),
+    ...(effort ? ["--effort", effort] : []),
     "--tools", "", // no tools at all: the model only answers with JSON
   ];
 }
@@ -129,11 +136,43 @@ export const CODEX_OUTPUT_SCHEMA = {
   },
 } as const;
 
+/**
+ * Codex schema for the experimental `review.style: single` (mirrors singleOutputSchema in core/single.ts): lanes per file,
+ * top-level findings with path, line, quote and severity.
+ */
+export const CODEX_SINGLE_OUTPUT_SCHEMA = {
+  type: "object", additionalProperties: false, required: ["summary", "files", "findings", "rubric"],
+  properties: {
+    summary: { type: "string" },
+    files: {
+      type: "array",
+      items: {
+        type: "object", additionalProperties: false, required: ["path", "lane", "reason"],
+        properties: { path: { type: "string" }, lane: { type: "string", enum: ["auto", "review", "block"] }, reason: { type: "string" } },
+      },
+    },
+    findings: {
+      type: "array",
+      items: {
+        type: "object", additionalProperties: false, required: ["path", "line", "quote", "severity", "message"],
+        properties: { path: { type: "string" }, line: { type: "integer" }, quote: { type: "string" }, severity: { type: "string", enum: ["high", "medium", "low"] }, message: { type: "string" } },
+      },
+    },
+    rubric: CODEX_OUTPUT_SCHEMA.properties.rubric,
+  },
+} as const;
+
+/** The strict output schema for a review style. */
+export const codexSchemaFor = (style?: ReviewStyle | null): typeof CODEX_OUTPUT_SCHEMA | typeof CODEX_SINGLE_OUTPUT_SCHEMA =>
+  style === "single" ? CODEX_SINGLE_OUTPUT_SCHEMA : CODEX_OUTPUT_SCHEMA;
+
 export interface EngineOptions {
   bin?: string;
   model?: string | null;
-  /** codex only: reasoning effort (default DEFAULT_CODEX_EFFORT). */
+  /** codex: reasoning effort (default DEFAULT_CODEX_EFFORT). claude-code: `--effort` level (absent = no flag). Ignored for glm. */
   effort?: string | null;
+  /** Review style (experimental `single`): picks the codex output schema. Absent = triage. */
+  style?: ReviewStyle | null;
   /** Environment to copy the allowlist from (default process.env). */
   env?: Record<string, string | undefined>;
   /** Wait between SIGTERM and SIGKILL of the process group. */
@@ -234,7 +273,7 @@ function spawnCli(sp: SpawnSpec): Promise<string> {
 /** One `claude -p` invocation (claude-code, or glm when `engine` is "glm"). */
 export async function runClaude(prompt: string, signal: AbortSignal, o: EngineOptions = {}, engine: "claude-code" | "glm" = "claude-code"): Promise<string> {
   if (signal.aborted) throw abortReason(signal);
-  const args = claudeArgs(o.model);
+  const args = claudeArgs(o.model, engine === "claude-code" ? o.effort : null);
   const env = engineEnv(o.env, engine, o.apiKey);
   const cwd = await mkdtemp(join(tmpdir(), "mjr-claude-"));
   try {
@@ -251,7 +290,7 @@ export async function runCodex(prompt: string, signal: AbortSignal, o: EngineOpt
   const cwd = await mkdtemp(join(tmpdir(), "mjr-codex-"));
   try {
     const schemaFile = join(cwd, "schema.json"), outFile = join(cwd, "last-message.txt");
-    await writeFile(schemaFile, JSON.stringify(CODEX_OUTPUT_SCHEMA), { mode: 0o600 });
+    await writeFile(schemaFile, JSON.stringify(codexSchemaFor(o.style)), { mode: 0o600 });
     const args = codexArgs({ model: o.model, effort: o.effort ?? DEFAULT_CODEX_EFFORT, schemaFile, outFile });
     await spawnCli({ bin: o.bin ?? "codex", args, env: engineEnv(o.env, "codex"), cwd, stdin: prompt, signal, killGraceMs: o.killGraceMs });
     let last: string;

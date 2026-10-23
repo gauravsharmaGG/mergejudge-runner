@@ -6,6 +6,7 @@ import { ENGINE_BILLING, MODEL_RE, resolveEngine, type EngineCap, type EngineNam
 import { afterLocalJob, LocalCodeError, prepareLocalJob, type LocalCodeOptions } from "./localcode.js";
 import { GitError } from "./git.js";
 import { applyRunnerSecretHits } from "./secretscan.js";
+import { applyReviewStyleEnv } from "./style.js";
 import { EngineError, EngineProvider, type EngineId, type EngineOptions } from "./engine.js";
 import type { Logger } from "./redact.js";
 
@@ -83,7 +84,10 @@ export async function produceResult(
   const pieces = local?.pieces ?? (p as RunnerJobPayload).context ?? [];
   const retrievedInfo = local ? { ok: true, notes: local.notes } : (p as RunnerJobPayload).deep;
   let bodyNotes: string[] = [];
-  const provider = new EngineProvider(picked.engine as EngineId, signal, { ...ctx.options(picked.engine as EngineId), model: picked.model });
+  const engOpts = ctx.options(picked.engine as EngineId);
+  // MERGEJUDGE_REVIEW_STYLE (runner side only) can switch the experimental style for a local run; an invalid value is ignored with a warning.
+  const cfg = applyReviewStyleEnv(p.cfg, engOpts.env ?? process.env, (m) => log.warn(m, { job: job.id }));
+  const provider = new EngineProvider(picked.engine as EngineId, signal, { ...engOpts, model: picked.model, style: cfg.review.style });
   const result = await produceReviewResult({
     pr: {
       number: p.pr.number, title: p.pr.title, body: p.pr.body, node_id: p.pr.node_id,
@@ -92,7 +96,7 @@ export async function produceResult(
       labels: p.pr.labels.map((name) => ({ name })),
       user: { login: p.pr.author ?? null, type: p.pr.authorType ?? null },
     },
-    cfg: p.cfg, cfgRef: p.cfgRef, files, provider,
+    cfg, cfgRef: p.cfgRef, files, provider,
     ...(Array.isArray(p.learnedLines) ? { learnedLines: p.learnedLines.filter((l): l is string => typeof l === "string").slice(0, 40) } : {}), onNotes: (n) => { bodyNotes = n; },
     readRepoFile: async (path) => policyFiles[path] ?? null,
     contextSource: piecesContextSource(pieces),
