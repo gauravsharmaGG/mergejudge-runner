@@ -54335,7 +54335,12 @@ var DOC_KEYS = /* @__PURE__ */ new Set([
   ["AKIA", "IOSFODNN7", "EXAMPLE"].join(""),
   ["wJalrXUtnFEMI/K7MDENG/", "bPxRfiCYEXAMPLEKEY"].join("")
 ]);
-var PLACEHOLDER_WORD = /EXAMPLE|PLACEHOLDER|DUMMY|FAKE|XXXX/i;
+var PLACEHOLDER_WORD = /EXAMPLE|PLACEHOLDER|DUMMY|FAKE|XXXX|CHANGEME/i;
+var WORD_ONLY = /^[a-z]+(?:[-_][a-z]+)*$/i;
+var PLACEHOLDER_WORDS = /* @__PURE__ */ new Set(["test", "dummy", "fake", "example", "changeme", "placeholder", "sample", "mock", "secret", "redacted"]);
+function isWordPlaceholder(v) {
+  return WORD_ONLY.test(v) && v.toLowerCase().split(/[-_]/).some((w) => PLACEHOLDER_WORDS.has(w));
+}
 var RUN_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 function isTrivialBody(body) {
   if (body.length < 4) return false;
@@ -54375,7 +54380,7 @@ function scanSecrets(patch, path2 = "") {
           shown = mask(m[0]);
         } else if (p.name === "hard-coded api key") {
           const v = m[0].replace(/^[^"']*["']/, "").slice(0, -1);
-          kind = placeholderKind(v, v, true);
+          kind = placeholderKind(v, v, true) ?? (isWordPlaceholder(v) ? "test placeholder" : void 0);
           shown = mask(v);
         }
         if (kind) skipped.add(`placeholder secret skipped: ${shown} (${kind}${where})`);
