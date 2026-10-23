@@ -49,7 +49,14 @@ const DOC_KEYS = new Set([
   ["AKIA", "IOSFODNN7", "EXAMPLE"].join(""),
   ["wJalrXUtnFEMI/K7MDENG/", "bPxRfiCYEXAMPLEKEY"].join(""),
 ]);
-const PLACEHOLDER_WORD = /EXAMPLE|PLACEHOLDER|DUMMY|FAKE|XXXX/i;
+const PLACEHOLDER_WORD = /EXAMPLE|PLACEHOLDER|DUMMY|FAKE|XXXX|CHANGEME/i;
+const WORD_ONLY = /^[a-z]+(?:[-_][a-z]+)*$/i;
+const PLACEHOLDER_WORDS = new Set(["test", "dummy", "fake", "example", "changeme", "placeholder", "sample", "mock", "secret", "redacted"]);
+
+/** An api-key value made only of letter words joined by - or _ (no digits), at least one an obvious placeholder word. */
+function isWordPlaceholder(v: string): boolean {
+  return WORD_ONLY.test(v) && v.toLowerCase().split(/[-_]/).some((w) => PLACEHOLDER_WORDS.has(w));
+}
 const RUN_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 /** True for one repeated character, or a straight ascending run (ABCDEF..., 0123...; digits may wrap 9 -> 0). */
@@ -85,7 +92,8 @@ interface SecretScan { blocked: string[]; skipped: string[] }
  * Scans added lines of a unified-diff patch. Obvious fake keys (docs keys, EXAMPLE/PLACEHOLDER/DUMMY/FAKE/XXXX,
  * repeated or ascending-run bodies) go to `skipped` instead of `blocked`. A test/fixture path never exempts a
  * real-looking key by itself. Private key blocks are never skipped. GitHub tokens are skipped only for placeholder
- * words or repeated characters (not ascending runs).
+ * words or repeated characters (not ascending runs). Api-key values made only of words (no digits) including a
+ * test/dummy/fake/example/secret-style word are skipped as test placeholders.
  */
 export function scanSecrets(patch: string | undefined, path = ""): SecretScan {
   const blocked = new Set<string>();
@@ -106,7 +114,7 @@ export function scanSecrets(patch: string | undefined, path = ""): SecretScan {
           shown = mask(m[0]);
         } else if (p.name === "hard-coded api key") {
           const v = m[0].replace(/^[^"']*["']/, "").slice(0, -1);
-          kind = placeholderKind(v, v, true);
+          kind = placeholderKind(v, v, true) ?? (isWordPlaceholder(v) ? "test placeholder" : undefined);
           shown = mask(v);
         }
         if (kind) skipped.add(`placeholder secret skipped: ${shown} (${kind}${where})`);
