@@ -46,8 +46,8 @@ export interface PromptContext {
 }
 
 /** System prompt = base rules + optional trusted repo policy + optional rubric criteria. */
-export function buildSystemPrompt(ctx: PromptContext = {}): string {
-  const parts = [SYSTEM_PROMPT];
+export function buildSystemPrompt(ctx: PromptContext = {}, base: string = SYSTEM_PROMPT): string {
+  const parts = [base];
   if (ctx.policyText?.trim()) {
     const body = ctx.policyText.replace(new RegExp(`</?${POLICY_DELIM}>`, "gi"), "").replace(new RegExp(DELIM, "gi"), "untrusted-pr-data");
     parts.push(
@@ -155,6 +155,23 @@ export function diffLines(patch: string | undefined): Set<number> {
   return out;
 }
 
+/** New-file line number -> text (without the leading "+") of every ADDED line in a unified diff. Context lines are not included. */
+export function addedLines(patch: string | undefined): Map<number, string> {
+  const out = new Map<number, string>();
+  if (!patch) return out;
+  let n = 0;
+  let inHunk = false;
+  for (const line of patch.split("\n")) {
+    const h = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (h) { n = Number(h[1]); inHunk = true; continue; }
+    if (!inHunk || line.startsWith("\\")) continue;
+    if (line.startsWith("-")) continue;
+    if (line.startsWith("+")) out.set(n, line.slice(1));
+    n++;
+  }
+  return out;
+}
+
 /** Prefix added/context lines with their new-file line number so the LLM can cite them. */
 export function numberPatch(patch: string): string {
   let n = 0;
@@ -178,6 +195,11 @@ export const triageOutputSchema = z.object({
 export type TriageOutput = z.infer<typeof triageOutputSchema>;
 
 export function parseTriageOutput(raw: string): TriageOutput {
+  return parseJsonOutput(raw, triageOutputSchema);
+}
+
+/** Extract the JSON object from a model reply (fences, prose around it, near-JSON repair) and validate it with `schema`. */
+export function parseJsonOutput<T>(raw: string, schema: z.ZodType<T>): T {
   let t = raw.trim();
   const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fence?.[1]) t = fence[1].trim();
@@ -186,13 +208,13 @@ export function parseTriageOutput(raw: string): TriageOutput {
   if (a < 0 || b <= a) throw new Error("no JSON object in LLM output");
   const json = t.slice(a, b + 1);
   try {
-    return triageOutputSchema.parse(JSON.parse(json));
+    return schema.parse(JSON.parse(json));
   } catch (first) {
     // Local repair before spending a retry call: trailing commas, raw control characters and unescaped quotes
     // inside strings (the "Expected ',' or '}'" failures), and a reply cut off mid-object.
     const repaired = repairJson(t.slice(a));
     if (repaired !== undefined) {
-      try { return triageOutputSchema.parse(JSON.parse(repaired)); } catch { /* report the original error */ }
+      try { return schema.parse(JSON.parse(repaired)); } catch { /* report the original error */ }
     }
     throw first;
   }

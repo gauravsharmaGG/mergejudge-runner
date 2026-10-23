@@ -7,7 +7,7 @@ import { randomBytes } from "node:crypto";
 export interface EngineSettings {
   /** Default model for this engine (null / absent = the CLI's own default). */
   model?: string | null;
-  /** codex only: reasoning effort (minimal|low|medium|high|xhigh); absent = low. */
+  /** codex: reasoning effort (minimal|low|medium|high|xhigh); absent = low. claude-code: low|medium|high|xhigh|max passed as `--effort`; absent = no flag. */
   effort?: string | null;
   /** Further models this runner agrees to run when a repo asks for them ("*" = any). */
   models?: string[];

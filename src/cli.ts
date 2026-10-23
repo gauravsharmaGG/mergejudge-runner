@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { Writable } from "node:stream";
 import { createApi, errorCode, NetworkError } from "./api.js";
 import { buildEngineSettings, glmKeyOf, GLM_KEY_ENV, pickDefaultEngine, runnerCaps } from "./capabilities.js";
-import { CODEX_EFFORTS, isCodexEffort } from "./engine.js";
+import { CLAUDE_EFFORTS, CODEX_EFFORTS, isClaudeEffort, isCodexEffort } from "./engine.js";
 import { ConfigError, defaultConfigPath, loadConfig, saveConfig, validateUrl, type EngineSettings, type RunnerConfig } from "./config.js";
 import { detectClis, engineLine, engineLines, glmReport, NO_ENGINE_MESSAGE, readyEngines, unlistedEngineNotes, type EngineReport } from "./detect.js";
 import { createLogger, redact, tokenPrefix, type Logger } from "./redact.js";
@@ -42,9 +42,9 @@ export interface CliDeps {
 const USAGE = `mergejudge-runner ${VERSION}
 
 Usage:
-  mergejudge-runner register --code <enrollment-code> --url <https://app.mergejudge.si> [--name <name>] [--engine claude-code|codex|glm] [--model [engine=]<model>]... [--codex-effort minimal|low|medium|high|xhigh] [--glm-key-env NAME] [--claude-bin <path>] [--codex-bin <path>] [--concurrency 1] [--force]
-  mergejudge-runner login [--name <name>] [--installation <id>] [--url <https://app.mergejudge.si>] [--engine claude-code|codex|glm] [--model [engine=]<model>]... [--codex-effort minimal|low|medium|high|xhigh] [--glm-key-env NAME] [--claude-bin <path>] [--codex-bin <path>] [--concurrency 1] [--force] [--yes]
-  mergejudge-runner setup [code] [--yes] [--no-autostart] [--print-unit] [--name <name>] [--url <url>] [--engine <name>] [--model [engine=]<model>]... [--codex-effort minimal|low|medium|high|xhigh] [--glm-key-env NAME | --no-glm] [--force]
+  mergejudge-runner register --code <enrollment-code> --url <https://app.mergejudge.si> [--name <name>] [--engine claude-code|codex|glm] [--model [engine=]<model>]... [--codex-effort minimal|low|medium|high|xhigh] [--claude-effort low|medium|high|xhigh|max] [--glm-key-env NAME] [--claude-bin <path>] [--codex-bin <path>] [--concurrency 1] [--force]
+  mergejudge-runner login [--name <name>] [--installation <id>] [--url <https://app.mergejudge.si>] [--engine claude-code|codex|glm] [--model [engine=]<model>]... [--codex-effort minimal|low|medium|high|xhigh] [--claude-effort low|medium|high|xhigh|max] [--glm-key-env NAME] [--claude-bin <path>] [--codex-bin <path>] [--concurrency 1] [--force] [--yes]
+  mergejudge-runner setup [code] [--yes] [--no-autostart] [--print-unit] [--name <name>] [--url <url>] [--engine <name>] [--model [engine=]<model>]... [--codex-effort minimal|low|medium|high|xhigh] [--claude-effort low|medium|high|xhigh|max] [--glm-key-env NAME | --no-glm] [--force]
   mergejudge-runner run [--concurrency 1] [--once] [--claude-bin <path>] [--codex-bin <path>] [--job-timeout-min 10] [--remote-url-template <url with {owner} and {repo}>] [--cache-max-gb 5] [--local-index-max-files 20000] [--local-index-max-mb 200] [--local-index-max-seconds 900]
   mergejudge-runner status
 
@@ -54,9 +54,9 @@ Common: --config <path> (default: $XDG_CONFIG_HOME or ~/.config /mergejudge-runn
 `;
 
 const COMMAND_USAGE: Record<string, string> = {
-  register: "mergejudge-runner register --code <enrollment-code> --url <https://app.mergejudge.si> [--name <name>] [--engine claude-code|codex|glm] [--model [engine=]<model>]... [--codex-effort minimal|low|medium|high|xhigh] [--glm-key-env NAME] [--claude-bin <path>] [--codex-bin <path>] [--concurrency 1] [--force]",
-  login: "mergejudge-runner login [--name <name>] [--installation <id>] [--url <https://app.mergejudge.si>] [--engine claude-code|codex|glm] [--model [engine=]<model>]... [--codex-effort minimal|low|medium|high|xhigh] [--glm-key-env NAME] [--claude-bin <path>] [--codex-bin <path>] [--concurrency 1] [--force] [--yes]\n\nSigns in with GitHub (device flow): prints a code to enter at the address shown, waits for you to approve the MergeJudge GitHub App, then registers this machine and saves the config. With several installations, pass --installation <id> (or pick one when run in a terminal). MERGEJUDGE_URL overrides the default server.",
-  setup: "mergejudge-runner setup [code] [--yes] [--no-autostart] [--print-unit] [--name <name>] [--url <url>] [--engine <name>] [--model [engine=]<model>]... [--codex-effort minimal|low|medium|high|xhigh] [--glm-key-env NAME | --no-glm] [--force]\n\nRegisters this machine (without a code: sign in with GitHub, like `login`; with a code from the panel: enrollment code), detects which of claude and codex are installed and signed in, asks whether to add a GLM (z.ai, billed per use) API key (--glm-key-env NAME reads it from that environment variable; --no-glm skips the question), and offers to start the runner at login. MERGEJUDGE_URL overrides the default server.",
+  register: "mergejudge-runner register --code <enrollment-code> --url <https://app.mergejudge.si> [--name <name>] [--engine claude-code|codex|glm] [--model [engine=]<model>]... [--codex-effort minimal|low|medium|high|xhigh] [--claude-effort low|medium|high|xhigh|max] [--glm-key-env NAME] [--claude-bin <path>] [--codex-bin <path>] [--concurrency 1] [--force]",
+  login: "mergejudge-runner login [--name <name>] [--installation <id>] [--url <https://app.mergejudge.si>] [--engine claude-code|codex|glm] [--model [engine=]<model>]... [--codex-effort minimal|low|medium|high|xhigh] [--claude-effort low|medium|high|xhigh|max] [--glm-key-env NAME] [--claude-bin <path>] [--codex-bin <path>] [--concurrency 1] [--force] [--yes]\n\nSigns in with GitHub (device flow): prints a code to enter at the address shown, waits for you to approve the MergeJudge GitHub App, then registers this machine and saves the config. With several installations, pass --installation <id> (or pick one when run in a terminal). MERGEJUDGE_URL overrides the default server.",
+  setup: "mergejudge-runner setup [code] [--yes] [--no-autostart] [--print-unit] [--name <name>] [--url <url>] [--engine <name>] [--model [engine=]<model>]... [--codex-effort minimal|low|medium|high|xhigh] [--claude-effort low|medium|high|xhigh|max] [--glm-key-env NAME | --no-glm] [--force]\n\nRegisters this machine (without a code: sign in with GitHub, like `login`; with a code from the panel: enrollment code), detects which of claude and codex are installed and signed in, asks whether to add a GLM (z.ai, billed per use) API key (--glm-key-env NAME reads it from that environment variable; --no-glm skips the question), and offers to start the runner at login. MERGEJUDGE_URL overrides the default server.",
   run: "mergejudge-runner run [--concurrency 1] [--once] [--claude-bin <path>] [--codex-bin <path>] [--job-timeout-min 10] [--remote-url-template <url with {owner} and {repo}>] [--cache-max-gb 5] [--local-index-max-files 20000] [--local-index-max-mb 200] [--local-index-max-seconds 900]",
   status: "mergejudge-runner status",
 };
@@ -80,7 +80,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       args: rest, strict: true, allowPositionals: cmd === "setup",
       options: {
         code: { type: "string" }, url: { type: "string" }, name: { type: "string" }, engine: { type: "string" },
-        "claude-bin": { type: "string" }, "codex-bin": { type: "string" }, "codex-effort": { type: "string" }, model: { type: "string", multiple: true }, "glm-key-env": { type: "string" }, "no-glm": { type: "boolean" }, concurrency: { type: "string" }, force: { type: "boolean" }, once: { type: "boolean" },
+        "claude-bin": { type: "string" }, "codex-bin": { type: "string" }, "codex-effort": { type: "string" }, "claude-effort": { type: "string" }, model: { type: "string", multiple: true }, "glm-key-env": { type: "string" }, "no-glm": { type: "boolean" }, concurrency: { type: "string" }, force: { type: "boolean" }, once: { type: "boolean" },
         config: { type: "string" }, "job-timeout-min": { type: "string" }, "remote-url-template": { type: "string" }, "cache-max-gb": { type: "string" }, "local-index-max-files": { type: "string" }, "local-index-max-mb": { type: "string" }, "local-index-max-seconds": { type: "string" }, wait: { type: "string" },
         help: { type: "boolean", short: "h" },
         installation: { type: "string" }, yes: { type: "boolean" }, "no-autostart": { type: "boolean" }, "print-unit": { type: "boolean" }, "dry-run-autostart": { type: "boolean" },
@@ -107,6 +107,14 @@ function applyCodexEffort(settings: Record<string, EngineSettings>, effort: stri
   if (!isCodexEffort(effort)) throw new ConfigError(`--codex-effort must be one of ${CODEX_EFFORTS.join(", ")}`);
   if (!settings.codex) throw new ConfigError("--codex-effort needs the codex engine (codex installed and signed in, or --engine codex)");
   settings.codex.effort = effort;
+}
+
+/** `--claude-effort <level>`: stored as engines["claude-code"].effort and passed to claude as `--effort`. Without the flag no effort flag is passed. */
+function applyClaudeEffort(settings: Record<string, EngineSettings>, effort: string | undefined): void {
+  if (effort === undefined) return;
+  if (!isClaudeEffort(effort)) throw new ConfigError(`--claude-effort must be one of ${CLAUDE_EFFORTS.join(", ")}`);
+  if (!settings["claude-code"]) throw new ConfigError("--claude-effort needs the claude-code engine (claude installed and signed in, or --engine claude-code)");
+  settings["claude-code"].effort = effort;
 }
 
 type Vals = Record<string, string | boolean | string[] | undefined>;
@@ -146,6 +154,7 @@ function engineChoice(v: Vals, deps: CliDeps, env: Record<string, string | undef
     if (!enabled.length) { out(NO_ENGINE_MESSAGE); for (const l of engineLines(reports, deps.home ?? homedir(), true)) out(l); }
   }
   applyCodexEffort(settings, v["codex-effort"] as string | undefined);
+  applyClaudeEffort(settings, v["claude-effort"] as string | undefined);
   return {
     engine, settings, glmApiKey,
     claudeBin: binToStore(v, "claude-bin", reports, "claude-code"), codexBin: binToStore(v, "codex-bin", reports, "codex"),
@@ -357,6 +366,7 @@ async function setup(v: Vals, positionals: string[], configPath: string, deps: C
     const engine = requested && !enabled.includes(requested) && enabled.length === 0 && requested !== "glm" ? requested : pickDefaultEngine(requested, enabled);
     const settings = buildEngineSettings(enabled.includes(engine) ? enabled : [...enabled, engine], engine, (v.model as string[] | undefined) ?? []);
     applyCodexEffort(settings, v["codex-effort"] as string | undefined);
+    applyClaudeEffort(settings, v["claude-effort"] as string | undefined);
     const input = {
       url, name: v.name as string | undefined, engine, settings, glmApiKey, concurrency: v.concurrency as string | undefined,
       claudeBin: binToStore(v, "claude-bin", clis, "claude-code"), codexBin: binToStore(v, "codex-bin", clis, "codex"), force: v.force === true, configPath, fetch: deps.fetch, env,
