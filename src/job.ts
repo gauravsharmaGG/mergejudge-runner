@@ -6,6 +6,7 @@ import { ENGINE_BILLING, MODEL_RE, resolveEngine, type EngineCap, type EngineNam
 import { afterLocalJob, LocalCodeError, prepareLocalJob, type LocalCodeOptions } from "./localcode.js";
 import { GitError } from "./git.js";
 import { applyRunnerSecretHits } from "./secretscan.js";
+import { withAiMode, type ReviewMode } from "./deep.js";
 import { EngineError, EngineProvider, type EngineId, type EngineOptions } from "./engine.js";
 import type { Logger } from "./redact.js";
 
@@ -24,6 +25,8 @@ export interface EngineContext {
   blocked?: Record<string, string>;
   /** Local code source (paths, git remote, cache limits); set by the run loop. Needed for payload v2 jobs. */
   local?: LocalCodeOptions;
+  /** `--deep` / `--mode` / `MERGEJUDGE_MODE`. Unset keeps `ai.mode` on the job config. */
+  aiMode?: ReviewMode;
 }
 
 export interface LeasedJob { id: string; repo: string; pr: number; headSha: string; baseSha: string | null; mode: string; attempt: number; payload: unknown }
@@ -78,6 +81,8 @@ export async function produceResult(
     }
     log.info("local code prepared", { job: job.id, files: local.files.length, pieces: local.pieces.length, notes: local.notes.length });
   }
+  const cfg = ctx.aiMode ? withAiMode(p.cfg, ctx.aiMode) : p.cfg;
+  if (ctx.aiMode) log.info(`AI review mode ${ctx.aiMode} from the runner (CLI or MERGEJUDGE_MODE)`, { job: job.id });
   const files = local?.files ?? p.files;
   const policyFiles = local?.policyFiles ?? p.policyFiles;
   const pieces = local?.pieces ?? (p as RunnerJobPayload).context ?? [];
@@ -92,7 +97,7 @@ export async function produceResult(
       labels: p.pr.labels.map((name) => ({ name })),
       user: { login: p.pr.author ?? null, type: p.pr.authorType ?? null },
     },
-    cfg: p.cfg, cfgRef: p.cfgRef, files, provider,
+    cfg, cfgRef: p.cfgRef, files, provider,
     ...(Array.isArray(p.learnedLines) ? { learnedLines: p.learnedLines.filter((l): l is string => typeof l === "string").slice(0, 40) } : {}), onNotes: (n) => { bodyNotes = n; },
     readRepoFile: async (path) => policyFiles[path] ?? null,
     contextSource: piecesContextSource(pieces),

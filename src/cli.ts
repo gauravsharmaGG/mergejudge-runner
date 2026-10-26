@@ -14,6 +14,7 @@ import { deviceLogin } from "./login.js";
 import { resolveLocalCode } from "./localcode.js";
 import { runLoop } from "./run.js";
 import { buildUnit, DEFAULT_URL, defaultExec, installAutostart, type ExecFn } from "./setup.js";
+import { explicitReviewMode } from "./deep.js";
 import { FEATURES, MODES, VERSION } from "./version.js";
 
 export interface CliDeps {
@@ -45,7 +46,7 @@ Usage:
   mergejudge-runner register --code <enrollment-code> --url <https://app.mergejudge.si> [--name <name>] [--engine claude-code|codex|glm] [--model [engine=]<model>]... [--codex-effort minimal|low|medium|high|xhigh] [--glm-key-env NAME] [--claude-bin <path>] [--codex-bin <path>] [--concurrency 1] [--force]
   mergejudge-runner login [--name <name>] [--installation <id>] [--url <https://app.mergejudge.si>] [--engine claude-code|codex|glm] [--model [engine=]<model>]... [--codex-effort minimal|low|medium|high|xhigh] [--glm-key-env NAME] [--claude-bin <path>] [--codex-bin <path>] [--concurrency 1] [--force] [--yes]
   mergejudge-runner setup [code] [--yes] [--no-autostart] [--print-unit] [--name <name>] [--url <url>] [--engine <name>] [--model [engine=]<model>]... [--codex-effort minimal|low|medium|high|xhigh] [--glm-key-env NAME | --no-glm] [--force]
-  mergejudge-runner run [--concurrency 1] [--once] [--claude-bin <path>] [--codex-bin <path>] [--job-timeout-min 10] [--remote-url-template <url with {owner} and {repo}>] [--cache-max-gb 5] [--local-index-max-files 20000] [--local-index-max-mb 200] [--local-index-max-seconds 900]
+  mergejudge-runner run [--concurrency 1] [--once] [--claude-bin <path>] [--codex-bin <path>] [--job-timeout-min 10] [--remote-url-template <url with {owner} and {repo}>] [--cache-max-gb 5] [--local-index-max-files 20000] [--local-index-max-mb 200] [--local-index-max-seconds 900] [--deep] [--mode fast|deep]
   mergejudge-runner status
 
 setup registers this machine (sign in with GitHub, or pass a code from the panel), detects which of claude and codex are installed and signed in, asks whether to add a GLM (z.ai, billed per use) API key, and offers to start the runner at login. MERGEJUDGE_URL overrides the default server.
@@ -57,7 +58,7 @@ const COMMAND_USAGE: Record<string, string> = {
   register: "mergejudge-runner register --code <enrollment-code> --url <https://app.mergejudge.si> [--name <name>] [--engine claude-code|codex|glm] [--model [engine=]<model>]... [--codex-effort minimal|low|medium|high|xhigh] [--glm-key-env NAME] [--claude-bin <path>] [--codex-bin <path>] [--concurrency 1] [--force]",
   login: "mergejudge-runner login [--name <name>] [--installation <id>] [--url <https://app.mergejudge.si>] [--engine claude-code|codex|glm] [--model [engine=]<model>]... [--codex-effort minimal|low|medium|high|xhigh] [--glm-key-env NAME] [--claude-bin <path>] [--codex-bin <path>] [--concurrency 1] [--force] [--yes]\n\nSigns in with GitHub (device flow): prints a code to enter at the address shown, waits for you to approve the MergeJudge GitHub App, then registers this machine and saves the config. With several installations, pass --installation <id> (or pick one when run in a terminal). MERGEJUDGE_URL overrides the default server.",
   setup: "mergejudge-runner setup [code] [--yes] [--no-autostart] [--print-unit] [--name <name>] [--url <url>] [--engine <name>] [--model [engine=]<model>]... [--codex-effort minimal|low|medium|high|xhigh] [--glm-key-env NAME | --no-glm] [--force]\n\nRegisters this machine (without a code: sign in with GitHub, like `login`; with a code from the panel: enrollment code), detects which of claude and codex are installed and signed in, asks whether to add a GLM (z.ai, billed per use) API key (--glm-key-env NAME reads it from that environment variable; --no-glm skips the question), and offers to start the runner at login. MERGEJUDGE_URL overrides the default server.",
-  run: "mergejudge-runner run [--concurrency 1] [--once] [--claude-bin <path>] [--codex-bin <path>] [--job-timeout-min 10] [--remote-url-template <url with {owner} and {repo}>] [--cache-max-gb 5] [--local-index-max-files 20000] [--local-index-max-mb 200] [--local-index-max-seconds 900]",
+  run: "mergejudge-runner run [--concurrency 1] [--once] [--claude-bin <path>] [--codex-bin <path>] [--job-timeout-min 10] [--remote-url-template <url with {owner} and {repo}>] [--cache-max-gb 5] [--local-index-max-files 20000] [--local-index-max-mb 200] [--local-index-max-seconds 900] [--deep] [--mode fast|deep]\n\n--deep and --mode deep run a second AI pass (cross-hunk and falsifiability). A finding from that pass is kept only when its quote matches the diff. --mode fast is one pass. MERGEJUDGE_MODE=deep does the same. Deterministic base-branch rules stay the floor. auto means low risk, not a guarantee.",
   status: "mergejudge-runner status",
 };
 
@@ -82,6 +83,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
         code: { type: "string" }, url: { type: "string" }, name: { type: "string" }, engine: { type: "string" },
         "claude-bin": { type: "string" }, "codex-bin": { type: "string" }, "codex-effort": { type: "string" }, model: { type: "string", multiple: true }, "glm-key-env": { type: "string" }, "no-glm": { type: "boolean" }, concurrency: { type: "string" }, force: { type: "boolean" }, once: { type: "boolean" },
         config: { type: "string" }, "job-timeout-min": { type: "string" }, "remote-url-template": { type: "string" }, "cache-max-gb": { type: "string" }, "local-index-max-files": { type: "string" }, "local-index-max-mb": { type: "string" }, "local-index-max-seconds": { type: "string" }, wait: { type: "string" },
+        deep: { type: "boolean" }, mode: { type: "string" },
         help: { type: "boolean", short: "h" },
         installation: { type: "string" }, yes: { type: "boolean" }, "no-autostart": { type: "boolean" }, "print-unit": { type: "boolean" }, "dry-run-autostart": { type: "boolean" },
       },
@@ -393,9 +395,11 @@ async function setup(v: Vals, positionals: string[], configPath: string, deps: C
 }
 
 async function run(v: Vals, configPath: string, deps: CliDeps, err: (l: string) => void): Promise<number> {
-  const cfg = loadConfig(configPath);
   const env = deps.env ?? process.env;
+  const aiMode = explicitReviewMode({ flag: v.mode as string | undefined, deepFlag: v.deep === true, env });
+  const cfg = loadConfig(configPath);
   const log: Logger = createLogger((l) => err(l), () => [cfg.token, glmKeyOf(cfg, env) ?? ""]);
+  if (aiMode) log.info(`AI review mode ${aiMode} (CLI flag or MERGEJUDGE_MODE). Second-pass findings need a quote that matches the diff. auto means low risk, not a guarantee.`);
   const ac = new AbortController();
   const signal = deps.signal ? AbortSignal.any([deps.signal, ac.signal]) : ac.signal;
   let hits = 0;
@@ -416,6 +420,7 @@ async function run(v: Vals, configPath: string, deps: CliDeps, err: (l: string) 
       claude: { bin: (v["claude-bin"] as string | undefined) ?? cfg.claudeBin ?? undefined, env: deps.env },
       codex: { bin: (v["codex-bin"] as string | undefined) ?? cfg.codexBin ?? undefined, env: deps.env },
       env: deps.env,
+      ...(aiMode ? { aiMode } : {}),
       local: resolveLocalCode(env, cfg.localCode, { remoteUrlTemplate: v["remote-url-template"] as string | undefined, cacheMaxGb: v["cache-max-gb"] ? Number(v["cache-max-gb"]) : undefined, indexMaxFiles: v["local-index-max-files"] ? Number(v["local-index-max-files"]) : undefined, indexMaxMb: v["local-index-max-mb"] ? Number(v["local-index-max-mb"]) : undefined, indexMaxSeconds: v["local-index-max-seconds"] ? Number(v["local-index-max-seconds"]) : undefined }, deps.home),
       exec: deps.exec, home: deps.home, fileExists: deps.fileExists,
       ...deps.runOverrides,

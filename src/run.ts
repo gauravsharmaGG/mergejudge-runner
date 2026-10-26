@@ -6,6 +6,7 @@ import { saveConfig, type RunnerConfig } from "./config.js";
 import { glmKeyOf, runnerCaps } from "./capabilities.js";
 import { EngineError, JobAbort, type EngineId, type EngineOptions } from "./engine.js";
 import { resolveLocalCode, type LocalCodeOptions } from "./localcode.js";
+import type { ReviewMode } from "./deep.js";
 import { NackError, produceResult, type LeasedJob } from "./job.js";
 import type { Logger } from "./redact.js";
 import { checkCli, CODEX_API_KEY_REASON, CODEX_NOT_CHATGPT_REASON, defaultExec, type ExecFn } from "./setup.js";
@@ -44,6 +45,8 @@ export interface RunOptions {
   codex?: EngineOptions;
   /** Environment engines copy their allowlist from, and where ZAI_API_KEY is read (default: claude.env, then process.env). */
   env?: Record<string, string | undefined>;
+  /** `--deep` / `--mode` / `MERGEJUDGE_MODE`. Unset keeps `ai.mode` from the job config (default fast). */
+  aiMode?: ReviewMode;
   fetch?: typeof fetch;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   now?: () => number;
@@ -210,7 +213,7 @@ export async function runLoop(o: RunOptions): Promise<number> {
       }
     })();
     try {
-      const { result, calls, engine } = await produceResult(job, ctl.signal, log, { caps, options: engineOptions, blocked, local });
+      const { result, calls, engine } = await produceResult(job, ctl.signal, log, { caps, options: engineOptions, blocked, local, ...(o.aiMode ? { aiMode: o.aiMode } : {}) });
       if (ctl.signal.aborted) { log.info("job cancelled; result discarded", { job: job.id }); return; }
       log.info("job produced result", { job: job.id, lane: result.lane, durationMs: now() - t0, engineCalls: calls, engine: engine.engine, model: engine.model ?? "default", findings: result.findings.length });
       await submit(job, result, ctl);

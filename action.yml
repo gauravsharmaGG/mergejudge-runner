@@ -20,6 +20,9 @@ inputs:
   mode:
     description: "auto (default) | triage | feedback | propose. auto picks from the GitHub event."
     default: auto
+  review_mode:
+    description: "fast (default) or deep. deep runs a second pass for cross-hunk, concurrency, security, data and API defects. A second-pass finding is kept only when its quote matches the diff. Same switch as ai.mode in .mergejudge.yml, MERGEJUDGE_MODE, and INPUT_REVIEW_MODE (the env name Actions sets for this input). Deterministic base-branch rules stay the floor. auto means low risk, not a guarantee."
+    required: false
   config_path:
     description: Path to the config file in the repository (read from the PR base).
     default: .mergejudge.yml

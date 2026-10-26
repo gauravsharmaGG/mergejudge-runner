@@ -7,6 +7,7 @@ import { fetchBaseConfig, type Octokit, type Repo } from "../core/github.js";
 import { runFeedback, runPropose, type FeedbackPayload } from "../core/learnflow.js";
 import { runReview, type ReviewPr } from "../core/review.js";
 import { redact, redactedLogs } from "./redact.js";
+import { explicitReviewMode, withAiMode } from "./deep.js";
 import { securityRequested, withSecurityMode } from "./security.js";
 import { retrieveFromWorkspace, WorkspaceError } from "./workspace.js";
 
@@ -56,12 +57,23 @@ async function loadCfg(ok: Octokit, repo: Repo, base: { ref?: string; sha?: stri
   log.info(`Config ${cfgPath} read from base ${cfgRef}.`);
   const security = securityRequested(text);
   if (security) log.info("review.security is on: adding the security rubric pack.");
-  const cfg = applyProviderOverrides(withSecurityMode(parseConfig(text), security), {
+  let cfg = applyProviderOverrides(withSecurityMode(parseConfig(text), security), {
     type: core.getInput("provider"),
     base_url: core.getInput("base_url"),
     model: core.getInput("model"),
     api_key_env: core.getInput("api_key_env"),
   });
+  // review_mode (Actions sets INPUT_REVIEW_MODE), then MERGEJUDGE_MODE. Empty leaves ai.mode from the base branch.
+  const reviewMode = explicitReviewMode({
+    reviewMode: core.getInput("review_mode") || process.env.INPUT_REVIEW_MODE,
+    env: process.env,
+  });
+  if (reviewMode) {
+    cfg = withAiMode(cfg, reviewMode);
+    log.info(`AI review mode ${reviewMode} from review_mode, MERGEJUDGE_MODE or INPUT_REVIEW_MODE.`);
+  } else if (cfg.ai.mode === "deep") {
+    log.info("AI review mode deep from .mergejudge.yml (ai.mode).");
+  }
   if (text === null) log.info(`No ${cfgPath} on base; using defaults.`);
   return { cfg, cfgRef };
 }

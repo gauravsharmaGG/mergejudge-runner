@@ -15,6 +15,14 @@ describe("GitHub Action", () => {
     expect(existsSync(join(root, manifest.runs.main))).toBe(true);
   });
 
+  it("action.yml exposes review_mode for the fast or deep second pass", () => {
+    const text = readFileSync(join(root, "action.yml"), "utf8");
+    expect(text).toContain("review_mode:");
+    expect(text).toContain("MERGEJUDGE_MODE");
+    expect(text).toContain("INPUT_REVIEW_MODE");
+    expect(text).not.toMatch(/[—–→]/);
+  });
+
   it("the committed bundle matches a fresh build (run `npm run build:action` and commit action/)", () => {
     const dir = mkdtempSync(join(tmpdir(), "mj-action-"));
     try {

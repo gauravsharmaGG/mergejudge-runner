@@ -170,6 +170,21 @@ describe("run --once: happy path", () => {
     expect(res.usage.mode).toBe("deep");
     expect(res.body).toContain("single pass");
   });
+  it("ai.mode deep runs a second pass and still reports review.mode deep", async () => {
+    const p = deepPayload({ ok: true, notes: ["Deep mode on a runner: single pass."] });
+    p.cfg = { ...p.cfg, ai: { mode: "deep" } };
+    w.polls.push(pollJob(p));
+    expect(await runLoop(opts().o)).toBe(0);
+    expect(fc.records()).toHaveLength(2);
+    expect(fc.records()[0]!.stdin).not.toContain("Second pass");
+    expect(fc.records()[1]!.stdin).toContain("Second pass");
+    expect(fc.records()[1]!.stdin).toContain("falsify");
+    expect(w.validations).toEqual([{ ok: true }]);
+    const res = w.of(/result/)[0]!.body.result;
+    expect(res.usage.mode).toBe("deep");
+    expect(res.usage.breakdown.second_pass).toBeGreaterThan(0);
+  });
+
   it("deep mode: when the Worker could not index, the pieces are context and the note says so", async () => {
     w.polls.push(pollJob(deepPayload({ ok: false, notes: ["Deep mode unavailable (repo too big); used context mode."] })));
     expect(await runLoop(opts().o)).toBe(0);

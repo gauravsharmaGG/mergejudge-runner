@@ -20,6 +20,8 @@ import { selectCriteria } from "./rubrics.js";
 import { excludeFromLlm, isMergeJudgeConfigPath } from "./rules.js";
 import { gatherContext, type ContextPiece, type ContextSource } from "./context.js";
 import { DELIM, runTriage, type Finding, type TokenBreakdown, type TriageResult } from "./triage.js";
+import { runSecondPass } from "../src/ai.js";
+import { aiModeOf } from "../src/deep.js";
 
 /** Rules-only note when the model call or its JSON could not be used. The class only: no provider body, no model text. */
 export function aiUnavailableNote(errorClass: string, truncated = false): string {
@@ -300,9 +302,27 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
     }
     const prompt = { title: pr.title ?? "", body: pr.body ?? "", files: kept, context };
     const tctx = { policyText: policies.text, criteria, learnedText: cfg.learning.enabled ? (o.learnedLines ? renderLearnedSection(o.learnedLines, DELIM) : buildLearnedContext({ learned: o.learned, lessons: o.lessons, outcomeStats: o.outcomeStats }, DELIM)) : "", skippedDiffFiles: skipped, ref: o.ref ?? `#${pr.number}` };
-    const res = mode === "deep" && tools && canUseTools(provider)
+    let res = mode === "deep" && tools && canUseTools(provider)
       ? await runDeepTriage(provider, prompt, cfg, tctx, { tools }, log.info, log.warning)
       : await runTriage(provider, prompt, cfg, tctx, log.info, log.warning);
+    // ai.mode deep: a second pass over the same numbered diff. Findings from that pass need a
+    // verified quote. File lanes can only rise. Base-branch rules stay the floor inside aggregate.
+    if (res.llm && aiModeOf(cfg) === "deep") {
+      const second = await runSecondPass(provider, prompt, cfg, tctx, res.llm, log.info);
+      if (second.note) notes.push(second.note);
+      log.info(second.logLine);
+      res = {
+        ...res,
+        llm: second.llm,
+        tokensEstimate: res.tokensEstimate + second.tokensEstimate,
+        breakdown: {
+          ...res.breakdown,
+          output: res.breakdown.output + second.outputTokens,
+          total: res.breakdown.total + second.tokensEstimate,
+          second_pass: second.tokensEstimate,
+        },
+      };
+    }
     usedMode = retrievedDeep ? "deep" : mode;
     tokens = res.tokensEstimate;
     llm = res.llm;

@@ -106,6 +106,8 @@ export interface TokenBreakdown {
   tools?: number;
   /** Deep mode: number of tool calls made. */
   tool_calls?: number;
+  /** `ai.mode: deep` only: estimated tokens of the second pass (prompt + reply). */
+  second_pass?: number;
   output: number;
   total: number;
   skipped_diff_files: string[];
