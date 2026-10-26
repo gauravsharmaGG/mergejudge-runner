@@ -28,15 +28,16 @@ describe("review.lane_map flag", () => {
     expect(body).toBe(renderComment({ agg, mode: "rules-only", tokensEstimate: 0, notes: [] }));
     expect(mk(false).body).toBe(body);
   });
-  it("flag on adds mermaid, buckets and per-file labels", () => {
+  it("flag on leads with counts and adds buckets and per-file labels", () => {
     const { body, agg } = mk(true);
     expect(body).toContain("### 🗺️ Lane choice map");
-    expect(body).toContain("```mermaid\nflowchart LR");
+    expect(body).not.toContain("```mermaid");
     expect(body).toContain("| Bucket |");
-    expect(body).toContain("| docs | 2 | 0 | 0 | - |");
-    expect(body).toContain("🟢 `auto` docs/a.md");
+    expect(body).toContain("| docs | 2 | 0 | 0 |");
+    expect(body).toContain("| docs/a.md | 🟢 `auto` |");
     expect(body).toContain("`mergejudge/lane`");
-    expect(body).toContain(`PR lane: ${agg.lane}`);
+    expect(body).toContain(`Why this lane?`);
+    expect(body.indexOf("Why this lane?")).toBeLessThan(body.indexOf("### 🗺️"));
     expect(body).not.toContain("Deeper view");
     expect(body).not.toContain("![Lane map]");
   });
@@ -49,6 +50,50 @@ describe("review.lane_map flag", () => {
     expect(bad).not.toContain("![Lane map]");
     expect(bad).not.toContain("Deeper view");
     expect(r({ laneMap: false, panelUrl: "https://panel.test/" })).not.toContain("Deeper view");
+  });
+  it("shows all raisers first in a 25-file smoke aggregate, then review and 18 auto files", () => {
+    const paths = [
+      ...Array.from({ length: 18 }, (_, i) => `docs/file-${i}.md`),
+      "src/a.ts", "src/b.ts",
+      ...Array.from({ length: 5 }, (_, i) => `migrations/${i}.sql`),
+    ];
+    const agg = aggregate(paths.map(pf), [], parseConfig("review:\n  lane_map: true\n"), null);
+    // Model/host floors can raise several files in the same bucket to block.
+    for (const f of agg.files) if (f.path.startsWith("migrations/")) { f.lane = "block"; f.reasons.push("host block floor"); }
+    agg.lane = "block";
+    const body = renderComment({ agg, mode: "rules-only", tokensEstimate: 0, notes: [], laneMap: true });
+    expect(body).not.toContain("mermaid");
+    expect(body).toContain("`auto: 18` · 🟡 `review: 2` · 🔴 `block: 5` — 25 files total");
+    const table = body.split("### File lanes")[1]!.split("> `review`")[0]!;
+    for (const path of paths) expect(table).toContain(`| ${path} |`);
+    for (let i = 0; i < 5; i++) {
+      expect(body.split("\n").find((line) => line.startsWith("Why this lane?"))).toContain(`migrations/${i}.sql`);
+      expect(table).toContain(`| migrations/${i}.sql | 🔴 \`block\` | Yes |`);
+      expect(table.indexOf(`| migrations/${i}.sql |`)).toBeLessThan(table.indexOf("| src/a.ts |"));
+    }
+    expect(table.indexOf("| src/b.ts |")).toBeLessThan(table.indexOf("| docs/file-0.md |"));
+    expect(agg.files.map((f) => f.path)).toEqual(paths);
+  });
+  it("handles a single file and a PR hold without a diagram or hosted assets", () => {
+    for (const path of ["README.md", "src/a.ts", "migrations/0.sql"]) {
+      const agg = aggregate([pf(path)], [], parseConfig(""), null);
+      const body = renderComment({ agg, mode: "rules-only", tokensEstimate: 0, notes: [], laneMap: true });
+      expect(body).not.toContain("mermaid");
+      expect(body).toContain("1 files total");
+      expect(body).toContain(`| ${path} |`);
+    }
+    const agg = aggregate([pf("README.md")], [], parseConfig(""), null);
+    agg.lane = "block";
+    agg.labelReasons = ["PR template missing"];
+    const body = renderComment({ agg, mode: "rules-only", tokensEstimate: 0, notes: [], laneMap: true });
+    expect(body).toContain("raised by PR template missing");
+    expect(body).toContain("| README.md | 🟢 `auto` | - |");
+  });
+  it("places the captioned GIF above the standalone explanation", () => {
+    const { agg } = mk(true);
+    const body = renderComment({ agg, mode: "rules-only", tokensEstimate: 0, notes: [], laneMap: true, laneMapImageUrl: "https://x.test/map.gif" });
+    expect(body.indexOf("![Lane map]")).toBeLessThan(body.indexOf("*Decision path:"));
+    expect(body.indexOf("*Decision path:")).toBeLessThan(body.indexOf("Why this lane?"));
   });
   it("does not change the PR lane", () => {
     expect(mk(true).agg.lane).toBe(mk(false).agg.lane);

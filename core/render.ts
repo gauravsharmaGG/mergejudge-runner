@@ -48,7 +48,7 @@ export interface RenderInput {
   approval?: { enabled?: boolean; mode?: string } | null;
   /** review.lane_map (default off): add the lane-choice map section. Explanatory only; never changes the lane. */
   laneMap?: boolean;
-  /** Optional https URL of a hosted `buildLaneMapGif` image; embedded above the mermaid map when laneMap is on. */
+  /** Optional https URL of a hosted `buildLaneMapGif` image; captioned above the markdown map when laneMap is on. */
   laneMapImageUrl?: string;
   /** Optional MergeJudge panel URL; adds one link line to the lane map. The sticky stands alone without it. */
   panelUrl?: string;
@@ -99,16 +99,17 @@ export function renderComment(r: RenderInput): string {
   const flagged = agg.files.filter((f) => f.lane !== "auto");
   const safe = agg.files.filter((f) => f.lane === "auto");
   const out: string[] = [MARKER, "## ⚖️ MergeJudge", ""];
-  out.push(renderLaneExplanation(agg), "", escapeMd(agg.summary), "");
-  out.push(`**Overall lane:** ${EMOJI[agg.lane]} \`${agg.lane}\``, "");
-  if (agg.labelReasons.length) out.push(...agg.labelReasons.map((l) => `- 🏷️ ${l}`), "");
-  out.push(...renderLaneCoach(r.fileFindings?.length ?? 0), "");
-
   if (r.laneMap === true) {
     out.push(...renderLaneMap(agg, { emoji: EMOJI, escape: escapeMd, maxRows: MAX_LIST_ROWS, more: moreNote, checkName: CHECK_NAME }, { imageUrl: r.laneMapImageUrl, panelUrl: r.panelUrl }));
+    out.push(escapeMd(agg.summary), "");
+  } else {
+    out.push(renderLaneExplanation(agg), "", escapeMd(agg.summary), "");
+    out.push(`**Overall lane:** ${EMOJI[agg.lane]} \`${agg.lane}\``, "");
+    if (agg.labelReasons.length) out.push(...agg.labelReasons.map((l) => `- 🏷️ ${l}`), "");
   }
+  out.push(...renderLaneCoach(r.fileFindings?.length ?? 0), "");
 
-  if (flagged.length) {
+  if (!r.laneMap && flagged.length) {
     out.push("### Files needing human review", "", "| File | Lane | Source | Reason |", "|---|---|---|---|");
     for (const f of flagged.slice(0, MAX_LIST_ROWS)) {
       const reason = [escapeMd(f.reasons.join("; ")), aiReasonNote(f)].filter(Boolean).join("; ") || "-";
@@ -116,7 +117,7 @@ export function renderComment(r: RenderInput): string {
     }
     out.push(...moreNote(MAX_LIST_ROWS, flagged.length), "");
   }
-  if (safe.length) {
+  if (!r.laneMap && safe.length) {
     out.push(`<details><summary>Safe files (${safe.length})</summary>`, "");
     for (const f of safe.slice(0, MAX_LIST_ROWS)) out.push(`- ${escapeMd(f.path)}${f.codeAuto ? " (code, auto via code_auto opt-in)" : ""}`);
     out.push(...moreNote(MAX_LIST_ROWS, safe.length), "", "</details>", "");
