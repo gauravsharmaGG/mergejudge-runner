@@ -176,10 +176,24 @@ export interface LaneMapRenderEnv {
 export function renderLaneMap(agg: MapAgg, env: LaneMapRenderEnv, opts: LaneMapOptions = {}): string[] {
   const { emoji, escape: esc } = env;
   const buckets = groupBuckets(agg);
-  const out: string[] = ["### 🗺️ Lane choice map", ""];
+  const raisers = agg.files.filter((f) => agg.lane !== "auto" && f.lane === agg.lane);
+  const causes = [
+    ...raisers.slice(0, env.maxRows).map((f) => esc(f.path)),
+    ...(raisers.length > env.maxRows ? [`${raisers.length - env.maxRows} more files`] : []),
+    ...agg.labelReasons.slice(0, env.maxRows).map(esc),
+  ];
+  const why = causes.length
+    ? `Why this lane? ${emoji[agg.lane]} \`${agg.lane}\` — ${causes.join("; ")} set the PR lane.`
+    : agg.lane === "auto"
+      ? `Why this lane? ${emoji.auto} \`auto\` — all ${agg.files.length} files passed auto-lane checks; no holds raised the lane.`
+      : `Why this lane? ${emoji[agg.lane]} \`${agg.lane}\` — no file or hold reason supplied.`;
+  const out: string[] = [];
   const img = plainHttps(opts.imageUrl);
-  if (img) out.push(`![Lane map](${img})`, "");
-  out.push("```mermaid", renderMermaid(agg, buckets), "```", "");
+  if (img) out.push(`![Lane map](${img})`, "", "*Decision path: PR opened → directory buckets → holds (if any) → PR lane. Green: auto; amber: review; red: block.*", "");
+  out.push(why, "", "### 🗺️ Lane choice map", "");
+  const counts = { auto: 0, review: 0, block: 0 };
+  for (const f of agg.files) counts[f.lane]++;
+  out.push(`${emoji.auto} **auto ${counts.auto}** · ${emoji.review} **review ${counts.review}** · ${emoji.block} **block ${counts.block}** — ${agg.files.length} file${agg.files.length === 1 ? "" : "s"} total`, "");
   out.push(
     "The PR lane is the strictest lane any file, label or PR-level rule reached; the map only explains it. " +
       `${emoji.review} \`review\` is advisory (\`${env.checkName}\` stays neutral); ${emoji.block} \`block\` fails \`${env.checkName}\`.`,
@@ -188,16 +202,17 @@ export function renderLaneMap(agg: MapAgg, env: LaneMapRenderEnv, opts: LaneMapO
   if (buckets.length) {
     out.push("| Bucket | " + emoji.auto + " auto | " + emoji.review + " review | " + emoji.block + " block | Raised the PR lane |", "|---|---|---|---|---|");
     for (const b of buckets.slice(0, env.maxRows)) {
-      const raised = b.raisers.length ? b.raisers.slice(0, 3).map(esc).join(", ") + (b.raisers.length > 3 ? ` (+${b.raisers.length - 3})` : "") : "-";
+      const raised = b.raisers.length ? b.raisers.slice(0, env.maxRows).map(esc).join(", ") + (b.raisers.length > env.maxRows ? ` (+${b.raisers.length - env.maxRows} more)` : "") : "-";
       out.push(`| ${esc(b.name)} | ${b.counts.auto} | ${b.counts.review} | ${b.counts.block} | ${raised} |`);
     }
     out.push(...env.more(env.maxRows, buckets.length), "");
   }
   if (agg.labelReasons.length) out.push(...agg.labelReasons.slice(0, env.maxRows).map((l) => `- 🏷️ Label hold: ${esc(l)}`), "");
   if (agg.files.length) {
-    out.push(`<details><summary>Per-file lanes (${agg.files.length})</summary>`, "");
-    for (const f of agg.files.slice(0, env.maxRows)) out.push(`- ${emoji[f.lane]} \`${f.lane}\` ${esc(f.path)}`);
-    out.push(...env.more(env.maxRows, agg.files.length), "", "</details>", "");
+    out.push(`### Per-file lanes (${agg.files.length})`, "", "PR-lane raisers first, then other review/block files, then auto files.", "");
+    const ordered = [...agg.files].sort((a, b) => LANE_ORDER[b.lane] - LANE_ORDER[a.lane]);
+    for (const f of ordered.slice(0, env.maxRows)) out.push(`- ${emoji[f.lane]} \`${f.lane}\` ${esc(f.path)}${agg.lane !== "auto" && f.lane === agg.lane ? " — **PR-lane raiser**" : ""}`);
+    out.push(...env.more(env.maxRows, agg.files.length), "");
   }
   const panel = plainHttps(opts.panelUrl);
   if (panel) out.push(`[Deeper view in MergeJudge panel](${panel})`, "");
