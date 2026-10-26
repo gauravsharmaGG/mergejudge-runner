@@ -1,4 +1,4 @@
-import type { Aggregate } from "./aggregate.js";
+import { explainLane, type Aggregate } from "./aggregate.js";
 import { LANE_ORDER, maxLane, type Lane } from "./types.js";
 
 /** Lane-choice map (opt-in `review.lane_map`): explains how the PR lane was reached. Explanatory only, never changes a lane. */
@@ -171,33 +171,45 @@ export interface LaneMapRenderEnv {
   maxRows: number;
   more: (shown: number, total: number) => string[];
   checkName: string;
+  aiReason?: (f: Aggregate["files"][number]) => string;
 }
 
 export function renderLaneMap(agg: MapAgg, env: LaneMapRenderEnv, opts: LaneMapOptions = {}): string[] {
   const { emoji, escape: esc } = env;
   const buckets = groupBuckets(agg);
-  const out: string[] = ["### 🗺️ Lane choice map", ""];
+  const raisers = agg.files.filter((f) => agg.lane !== "auto" && f.lane === agg.lane);
+  const names = raisers.slice(0, env.maxRows).map((f) => esc(f.path));
+  if (raisers.length > env.maxRows) names.push(`and ${raisers.length - env.maxRows} more files (see size limit below)`);
+  names.push(...agg.labelReasons.slice(0, env.maxRows).map(esc));
+  const why = names.length
+    ? `${agg.lane}: ${names.join("; ")} reached or held the PR lane.`
+    : esc(explainLane(agg).summary);
+  const out: string[] = [];
   const img = plainHttps(opts.imageUrl);
-  if (img) out.push(`![Lane map](${img})`, "");
-  out.push("```mermaid", renderMermaid(agg, buckets), "```", "");
-  out.push(
-    "The PR lane is the strictest lane any file, label or PR-level rule reached; the map only explains it. " +
-      `${emoji.review} \`review\` is advisory (\`${env.checkName}\` stays neutral); ${emoji.block} \`block\` fails \`${env.checkName}\`.`,
-    "",
-  );
+  if (img) out.push(`![Lane map](${img})`, "", "*Decision path: PR opened → directory buckets → label/PR holds → final lane. Green: auto; amber: review; red: block.*", "");
+  out.push(`Why this lane? ${why}`, "");
+  const counts = { auto: 0, review: 0, block: 0 };
+  for (const f of agg.files) counts[f.lane]++;
+  out.push(`${emoji.auto} **auto: ${counts.auto}** · ${emoji.review} **review: ${counts.review}** · ${emoji.block} **block: ${counts.block}** · ${agg.files.length} file${agg.files.length === 1 ? "" : "s"} total`, "");
+  out.push("### 🗺️ Lane choice map", "", `**PR lane: ${agg.lane}**`, "");
   if (buckets.length) {
-    out.push("| Bucket | " + emoji.auto + " auto | " + emoji.review + " review | " + emoji.block + " block | Raised the PR lane |", "|---|---|---|---|---|");
+    out.push("| Bucket | " + emoji.auto + " auto | " + emoji.review + " review | " + emoji.block + " block |", "|---|---|---|---|");
     for (const b of buckets.slice(0, env.maxRows)) {
-      const raised = b.raisers.length ? b.raisers.slice(0, 3).map(esc).join(", ") + (b.raisers.length > 3 ? ` (+${b.raisers.length - 3})` : "") : "-";
-      out.push(`| ${esc(b.name)} | ${b.counts.auto} | ${b.counts.review} | ${b.counts.block} | ${raised} |`);
+      out.push(`| ${esc(b.name)} | ${b.counts.auto} | ${b.counts.review} | ${b.counts.block} |`);
     }
     out.push(...env.more(env.maxRows, buckets.length), "");
   }
-  if (agg.labelReasons.length) out.push(...agg.labelReasons.slice(0, env.maxRows).map((l) => `- 🏷️ Label hold: ${esc(l)}`), "");
   if (agg.files.length) {
-    out.push(`<details><summary>Per-file lanes (${agg.files.length})</summary>`, "");
-    for (const f of agg.files.slice(0, env.maxRows)) out.push(`- ${emoji[f.lane]} \`${f.lane}\` ${esc(f.path)}`);
-    out.push(...env.more(env.maxRows, agg.files.length), "", "</details>", "");
+    // Sort a copy: final verdict order is shared with other consumers.
+    const ordered = [...agg.files].sort((a, b) => LANE_ORDER[b.lane] - LANE_ORDER[a.lane]);
+    out.push(`### Per-file lanes (${agg.files.length})`, "", `Raisers first, then other review/block files, then auto files (up to ${env.maxRows} rows).`, "",
+      "| File | Lane | Source | Why |", "|---|---|---|---|");
+    for (const f of ordered.slice(0, env.maxRows)) {
+      const raised = agg.lane !== "auto" && f.lane === agg.lane ? " **Raiser**" : "";
+      const reason = [esc(f.reasons.join("; ")), env.aiReason?.(f)].filter(Boolean).join("; ") || "-";
+      out.push(`| ${esc(f.path)} | ${emoji[f.lane]} \`${f.lane}\`${raised} | ${esc(f.source ?? "rule")} | ${reason} |`);
+    }
+    out.push(...env.more(env.maxRows, agg.files.length), "");
   }
   const panel = plainHttps(opts.panelUrl);
   if (panel) out.push(`[Deeper view in MergeJudge panel](${panel})`, "");

@@ -28,13 +28,13 @@ describe("review.lane_map flag", () => {
     expect(body).toBe(renderComment({ agg, mode: "rules-only", tokensEstimate: 0, notes: [] }));
     expect(mk(false).body).toBe(body);
   });
-  it("flag on adds mermaid, buckets and per-file labels", () => {
+  it("flag on leads with raisers and counts without mermaid", () => {
     const { body, agg } = mk(true);
     expect(body).toContain("### 🗺️ Lane choice map");
-    expect(body).toContain("```mermaid\nflowchart LR");
+    expect(body).not.toContain("```mermaid");
     expect(body).toContain("| Bucket |");
-    expect(body).toContain("| docs | 2 | 0 | 0 | - |");
-    expect(body).toContain("🟢 `auto` docs/a.md");
+    expect(body).toContain("| docs | 2 | 0 | 0 |");
+    expect(body).toContain("| docs/a.md | 🟢 `auto`");
     expect(body).toContain("`mergejudge/lane`");
     expect(body).toContain(`PR lane: ${agg.lane}`);
     expect(body).not.toContain("Deeper view");
@@ -49,6 +49,62 @@ describe("review.lane_map flag", () => {
     expect(bad).not.toContain("![Lane map]");
     expect(bad).not.toContain("Deeper view");
     expect(r({ laneMap: false, panelUrl: "https://panel.test/" })).not.toContain("Deeper view");
+  });
+  it.each(["README.md", "src/app.ts"])("stands alone for one file: %s", (path) => {
+    const agg = aggregate([pf(path)], [], parseConfig(""), null);
+    const body = renderComment({ agg, mode: "rules-only", tokensEstimate: 0, notes: [], laneMap: true });
+    expect(body).not.toContain("mermaid");
+    expect(body).toContain("1 file total");
+    expect(body).toContain(`| ${path} |`);
+    expect(body.indexOf("Why this lane?")).toBeLessThan(body.indexOf("**auto:"));
+    expect(body).not.toContain("Deeper view");
+  });
+  it("smokes a 25-file PR with every raiser before review and a 16-file auto sample", () => {
+    const paths = [
+      ...Array.from({ length: 16 }, (_, i) => `docs/page${i}.md`),
+      ...Array.from({ length: 4 }, (_, i) => `src/file${i}.ts`),
+      ...Array.from({ length: 5 }, (_, i) => `migrations/change${i}.sql`),
+    ];
+    const cfg = parseConfig("review:\n  lane_map: true\n");
+    const agg = aggregate(paths.map(pf), [], cfg, {
+      summary: "25-file smoke fixture", findings: [], rubric: [],
+      files: new Map(paths.slice(20).map((path) => [path, { lane: "block" as const, reason: "Unsafe migration needs correction" }])),
+    });
+    const original = agg.files.map((f) => f.path);
+    const body = renderComment({ agg, mode: "rules-only", tokensEstimate: 0, notes: [], laneMap: cfg.review.lane_map });
+    expect(body).not.toContain("mermaid");
+    expect(body).toContain("**auto: 16** · 🟡 **review: 4** · 🔴 **block: 5** · 25 files total");
+    const lead = body.split("\n").find((line) => line.startsWith("Why this lane?"))!;
+    for (const path of paths.slice(20)) {
+      expect(lead).toContain(path);
+      expect(body).toContain(`| ${path} | 🔴 \`block\` **Raiser** |`);
+    }
+    for (const path of paths) expect(body).toContain(`| ${path} |`);
+    expect(body.indexOf("| migrations/change4.sql |")).toBeLessThan(body.indexOf("| src/file0.ts |"));
+    expect(body.indexOf("| src/file3.ts |")).toBeLessThan(body.indexOf("| docs/page0.md |"));
+    expect(agg.files.map((f) => f.path)).toEqual(original);
+    const imageBody = renderComment({ agg, mode: "rules-only", tokensEstimate: 0, notes: [], laneMap: true, laneMapImageUrl: "https://x.test/path.gif" });
+    expect(imageBody.indexOf("![Lane map]")).toBeLessThan(imageBody.indexOf("Why this lane?"));
+    expect(imageBody).toContain("*Decision path:");
+  });
+  it("keeps late raisers visible when the file table reaches its row cap", () => {
+    const agg = aggregate([
+      ...Array.from({ length: 110 }, (_, i) => pf(`docs/page${i}.md`)),
+      ...Array.from({ length: 5 }, (_, i) => pf(`src/raiser${i}.ts`)),
+    ], [], parseConfig(""), null);
+    const body = renderComment({ agg, mode: "rules-only", tokensEstimate: 0, notes: [], laneMap: true });
+    for (let i = 0; i < 5; i++) expect(body).toContain(`| src/raiser${i}.ts | 🟡 \`review\` **Raiser** |`);
+    expect(body).toContain("**auto: 110** · 🟡 **review: 5** · 🔴 **block: 0** · 115 files total");
+    expect(body).toContain("15 more not shown (115 in total)");
+    expect(body).not.toContain("| docs/page95.md |");
+  });
+  it("names PR-level holds even when no file raises the lane", () => {
+    const agg = aggregate([pf("README.md")], [], parseConfig(""), null);
+    agg.lane = "review";
+    agg.labelReasons = ["PR template missing tests"];
+    const body = renderComment({ agg, mode: "rules-only", tokensEstimate: 0, notes: [], laneMap: true });
+    expect(body).toContain("Why this lane? review: PR template missing tests reached or held the PR lane.");
+    expect(body).not.toContain("**Raiser**");
   });
   it("does not change the PR lane", () => {
     expect(mk(true).agg.lane).toBe(mk(false).agg.lane);
