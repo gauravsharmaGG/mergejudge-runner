@@ -96,68 +96,62 @@ export function renderLaneCoach(unverified = 0): string[] {
 
 export function renderComment(r: RenderInput): string {
   const { agg } = r;
-  const flagged = agg.files.filter((f) => f.lane !== "auto");
   const safe = agg.files.filter((f) => f.lane === "auto");
-  const out: string[] = [MARKER, "## ⚖️ MergeJudge", ""];
-  if (r.laneMap === true) {
-    out.push(...renderLaneMap(agg, { emoji: EMOJI, escape: escapeMd, maxRows: MAX_LIST_ROWS, more: moreNote, checkName: CHECK_NAME, reason: (f) => [escapeMd(f.reasons.join("; ")), aiReasonNote(f)].filter(Boolean).join("; ") }, { imageUrl: r.laneMapImageUrl, panelUrl: r.panelUrl }));
-    out.push(escapeMd(agg.summary), "");
-  } else {
-    out.push(renderLaneExplanation(agg), "", escapeMd(agg.summary), "");
-    out.push(`**Overall lane:** ${EMOJI[agg.lane]} \`${agg.lane}\``, "");
-    if (agg.labelReasons.length) out.push(...agg.labelReasons.map((l) => `- 🏷️ ${l}`), "");
-  }
-  out.push(...renderLaneCoach(r.fileFindings?.length ?? 0), "");
-
-  if (!r.laneMap && flagged.length) {
-    out.push("### Files needing human review", "", "| File | Lane | Source | Reason |", "|---|---|---|---|");
-    for (const f of flagged.slice(0, MAX_LIST_ROWS)) {
+  const out: string[] = [MARKER, "## ⚖️ MergeJudge", "",
+    `**Overall lane:** ${EMOJI[agg.lane]} \`${agg.lane}\``, "",
+    `Why this lane? ${escapeMd(explainLane(agg).summary)}`, "", "### Findings", ""];
+  // Group across sources before capping: a late rubric blocker must precede any review finding.
+  for (const lane of ["block", "review", "auto"] as const) {
+    const rows: string[] = [];
+    if (agg.lane === lane) rows.push(...agg.labelReasons.map((reason) => `- 🏷️ ${escapeMd(reason)}`));
+    for (const f of agg.files.filter((f) => f.lane === lane && lane !== "auto")) {
       const reason = [escapeMd(f.reasons.join("; ")), aiReasonNote(f)].filter(Boolean).join("; ") || "-";
-      out.push(`| ${escapeMd(f.path)} | ${EMOJI[f.lane]} ${f.lane} | ${f.source ?? "rule"} | ${reason} |`);
+      rows.push(`- ${escapeMd(f.path)} (${escapeMd(f.source ?? "rule")}): ${reason}`);
     }
-    out.push(...moreNote(MAX_LIST_ROWS, flagged.length), "");
+    for (const x of agg.rubric ?? []) {
+      if (x.verdict !== "fail" || (x.raiseTo ?? "auto") !== lane) continue;
+      const where = x.evidence ? ` (${escapeMd(x.evidence.path)}${x.evidence.line ? ":" + x.evidence.line : ""})` : "";
+      rows.push(`- ❌ \`${escapeMd(x.id)}\` ${x.severity}${where}: ${escapeMd(x.justification)}${x.raiseTo ? ` → raised to ${x.raiseTo}` : ""}`);
+    }
+    if (rows.length) out.push(`#### ${lane === "auto" ? "Informational" : lane === "block" ? "Block" : "Review"}`, "", ...rows.slice(0, MAX_LIST_ROWS), ...moreNote(MAX_LIST_ROWS, rows.length), "");
   }
-  if (!r.laneMap && safe.length) {
-    out.push(`<details><summary>Safe files (${safe.length})</summary>`, "");
-    for (const f of safe.slice(0, MAX_LIST_ROWS)) out.push(`- ${escapeMd(f.path)}${f.codeAuto ? " (code, auto via code_auto opt-in)" : ""}`);
-    out.push(...moreNote(MAX_LIST_ROWS, safe.length), "", "</details>", "");
+  if (!agg.files.some((f) => f.lane !== "auto") && !agg.labelReasons.length && !agg.rubric?.some((x) => x.verdict === "fail")) out.push("No lane-raising findings.", "");
+  out.push(escapeMd(agg.summary), "");
+  if (r.laneMap === true) {
+    out.push(...renderLaneMap(agg, { emoji: EMOJI, escape: escapeMd, maxRows: MAX_LIST_ROWS, more: moreNote, checkName: CHECK_NAME, reason: (f) => [escapeMd(f.reasons.join("; ")), aiReasonNote(f)].filter(Boolean).join("; ") }, { imageUrl: r.laneMapImageUrl, panelUrl: r.panelUrl, omitOutcome: true }));
+  } else {
+    const explanation = renderLaneExplanation(agg).split("\n").slice(1).join("\n");
+    if (explanation) out.push(explanation, "");
+    if (safe.length) {
+      out.push(`<details><summary>Safe files (${safe.length})</summary>`, "",
+        ...safe.slice(0, MAX_LIST_ROWS).map((f) => `- ${escapeMd(f.path)}${f.codeAuto ? " (code, auto via code_auto opt-in)" : ""}`),
+        ...moreNote(MAX_LIST_ROWS, safe.length), "", "</details>", "");
+    }
   }
-  if (safe.length && flagged.length) {
-    out.push(
-      "### Split suggestion",
-      "",
-      "This PR mixes auto-mergeable and review/block changes. These files could go in a separate auto-mergeable PR:",
-      "",
-      ...safe.slice(0, MAX_LIST_ROWS).map((f) => `- ${escapeMd(f.path)}`),
-      ...moreNote(MAX_LIST_ROWS, safe.length),
-      "",
-    );
+  out.push(...renderLaneCoach(), "");
+  if (safe.length && safe.length < agg.files.length) {
+    out.push("### Split suggestion", "", "These auto-mergeable files could go in a separate PR:", "",
+      ...safe.slice(0, MAX_LIST_ROWS).map((f) => `- ${escapeMd(f.path)}`), ...moreNote(MAX_LIST_ROWS, safe.length), "");
   }
   if (agg.rubric?.length) {
-    const icon = { pass: "✅", fail: "❌", "n/a": "➖", unverified: "❔" } as const;
-    const fails = agg.rubric.filter((x) => x.verdict === "fail" || x.verdict === "unverified");
-    const passes = agg.rubric.filter((x) => x.verdict === "pass").length;
-    const na = agg.rubric.filter((x) => x.verdict === "n/a").length;
-    out.push(`### Rubric: ${passes} pass · ${fails.length} fail/unverified · ${na} n/a`, "");
-    for (const x of fails) {
-      const where = x.evidence ? ` (${escapeMd(x.evidence.path)}${x.evidence.line ? ":" + x.evidence.line : ""})` : "";
-      const sc = x.score !== undefined ? ` ${x.score}/5` : "";
-      out.push(`- ${icon[x.verdict]} \`${escapeMd(x.id)}\` ${x.severity}${sc}${where}: ${escapeMd(x.justification)}${x.raiseTo ? ` → raised to ${x.raiseTo}` : ""}`);
-    }
-    if (fails.length) out.push("");
-    out.push(`<details><summary>All criteria</summary>`, "");
-    for (const x of agg.rubric.slice(0, MAX_LIST_ROWS))
-      out.push(`- ${icon[x.verdict]} \`${escapeMd(x.id)}\`${x.score !== undefined ? ` ${x.score}/5` : ""}: ${escapeMd(x.justification) || "-"}`);
+    out.push("<details><summary>All criteria</summary>", "");
+    for (const x of agg.rubric.slice(0, MAX_LIST_ROWS)) out.push(`- \`${escapeMd(x.id)}\` (${x.verdict})${x.score !== undefined ? ` ${x.score}/5` : ""}: ${escapeMd(x.justification) || "-"}`);
     out.push(...moreNote(MAX_LIST_ROWS, agg.rubric.length), "", "</details>", "");
   }
+  const head = out.join("\n");
+  const coverage: string[] = ["### Coverage gaps", ""];
+  const gaps = [...r.notes];
+  if (r.mode === "rules-only") gaps.unshift("AI review was not performed; only deterministic rules were checked.");
+  for (const p of r.policyFiles ?? []) if (p.truncated) gaps.push(`Policy file truncated: ${p.path}`);
+  for (const x of agg.rubric ?? []) if (x.verdict === "unverified") gaps.push(`Unverified criterion ${x.id}: ${x.justification}`);
+  for (const n of gaps.slice(0, MAX_LIST_ROWS)) coverage.push(`- ${escapeMd(n)}`);
+  coverage.push(...moreNote(MAX_LIST_ROWS, gaps.length));
   if (r.fileFindings?.length) {
     const n = r.fileFindings.length;
-    out.push(`### ❔ Needs human (${n})`, "", `${n} finding${n === 1 ? " needs" : "s need"} human validation (no verified diff quote), so ${n === 1 ? "it was" : "they were"} not posted as line comments.`, "");
-    for (const f of r.fileFindings.slice(0, MAX_LIST_ROWS)) out.push(`- ${escapeMd(f.path)}: ${escapeMd(f.message)}`);
-    out.push(...moreNote(MAX_LIST_ROWS, r.fileFindings.length), "");
-  }
-  for (const n of r.notes) out.push(`> ⚠️ ${escapeMd(n)}`, "");
-  const head = out.join("\n");
+    coverage.push(`#### ❔ Needs human (${n})`, "", `${n} finding${n === 1 ? " needs" : "s need"} human validation (no verified diff quote), so ${n === 1 ? "it was" : "they were"} not posted as line comments.`, "");
+    for (const f of r.fileFindings.slice(0, MAX_LIST_ROWS)) coverage.push(`- ${escapeMd(f.path)}: ${escapeMd(f.message)}`);
+    coverage.push(...moreNote(MAX_LIST_ROWS, r.fileFindings.length), "");
+  } else if (!gaps.length) coverage.push("No coverage gaps reported.", "");
   const tail: string[] = ["---", "", renderFeedback(agg.rubric ?? []), ""];
   tail.push(
     `<sub>Mode: ${escapeMd(r.mode)} · ~${r.tokensEstimate} tokens (estimate)` +
@@ -169,7 +163,8 @@ export function renderComment(r: RenderInput): string {
         : "") +
       ` · ${mergeNote(r.approval)}</sub>`,
   );
-  return capBody(head, "\n" + tail.join("\n"));
+  const closing = capBody(coverage.join("\n"), "\n" + tail.join("\n"), MAX_COMMENT_CHARS / 2);
+  return capBody(head, "\n" + closing);
 }
 
 export const CHECK_NAME = "mergejudge/lane";

@@ -328,6 +328,11 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
     if (res.suppressed.length || res.downgraded.length)
       notes.push(`Known false alarms in this repo: ${res.suppressed.length} finding(s) hidden, ${res.downgraded.length} listed without an inline comment (manage them in the MergeJudge panel).`);
   }
+  const excluded = excludeFromLlm(files, cfg.diff_exclude).skipped;
+  if (excluded.length) notes.push(`Diff files excluded from AI review: ${excluded.join(", ")}`);
+  const missingPatches = files.filter((f) => !f.patch);
+  if (missingPatches.length) notes.push(`Diff unavailable for: ${missingPatches.map((f) => f.path).join(", ")}`);
+  if (policies.skipped.length) notes.push(`Policy files not found or empty: ${policies.skipped.join(", ")}`);
   o.onNotes?.([...notes]);
   const body = renderComment({
     agg, mode: llm && provider ? provider.label : "rules-only", tokensEstimate: tokens, notes,

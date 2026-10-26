@@ -156,6 +156,8 @@ export function buildLaneMapGif(agg: MapAgg): Uint8Array {
 /* ---------- markdown ---------- */
 
 export interface LaneMapOptions {
+  /** The sticky already leads with its outcome. */
+  omitOutcome?: boolean;
   /** https URL of a hosted copy of `buildLaneMapGif` output. Embedded only when it is a plain https URL. */
   imageUrl?: string;
   /** MergeJudge panel URL; one optional link line, the map stands alone without it. */
@@ -190,7 +192,7 @@ export function renderLaneMap(agg: MapAgg, env: LaneMapRenderEnv, opts: LaneMapO
   const why = causes.length
     ? `raised by ${causes.join("; ")}`
     : agg.lane === "auto" ? `all ${agg.files.length} files are auto; no holds raised the lane` : "no file or hold reason supplied";
-  out.push(`Why this lane? ${emoji[agg.lane]} \`${agg.lane}\` — ${why}.`, "");
+  if (!opts.omitOutcome) out.push(`Why this lane? ${emoji[agg.lane]} \`${agg.lane}\` — ${why}.`, "");
   const counts = { auto: 0, review: 0, block: 0 };
   for (const f of agg.files) counts[f.lane]++;
   out.push(`${emoji.auto} \`auto ${counts.auto}\` · ${emoji.review} \`review ${counts.review}\` · ${emoji.block} \`block ${counts.block}\` · **${agg.files.length} files total**`, "", "### 🗺️ Lane choice map", "");

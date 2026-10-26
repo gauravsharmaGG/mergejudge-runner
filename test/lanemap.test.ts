@@ -36,7 +36,8 @@ describe("review.lane_map flag", () => {
     expect(body).toContain("| docs | 2 | 0 | 0 |");
     expect(body).toContain("| docs/a.md | 🟢 `auto`");
     expect(body).toContain("`mergejudge/lane`");
-    expect(body).toContain(`\`${agg.lane}\` — raised by`);
+    expect(body).toContain(`\`${agg.lane}\``);
+    expect(body.match(/Overall lane:/g)).toHaveLength(1);
     expect(body).not.toContain("Deeper view");
     expect(body).not.toContain("![Lane map]");
   });
@@ -53,7 +54,7 @@ describe("review.lane_map flag", () => {
   it("renders a one-file PR without needing an image or panel", () => {
     const agg = aggregate([pf("src/only.ts")], [], parseConfig(""), null);
     const body = renderComment({ agg, mode: "rules-only", tokensEstimate: 0, notes: [], laneMap: true });
-    expect(body).toContain("Why this lane? 🟡 `review` — raised by src/only.ts.");
+    expect(body).toContain("Why this lane? needs review: touches src/only.ts:");
     expect(body).toContain("`auto 0` · 🟡 `review 1` · 🔴 `block 0`");
     expect(body).toContain("| src/only.ts | 🟡 `review` · **raiser** |");
     expect(body).not.toContain("mermaid");
@@ -77,7 +78,7 @@ describe("review.lane_map flag", () => {
     }
     expect(table.indexOf("| src/b.ts |")).toBeLessThan(table.indexOf("| docs/page0.md |"));
     const illustrated = renderComment({ agg, mode: "rules-only", tokensEstimate: 0, notes: [], laneMap: true, laneMapImageUrl: "https://x.test/m.gif" });
-    expect(illustrated.indexOf("![Lane map]")).toBeLessThan(illustrated.indexOf("Why this lane?"));
+    expect(illustrated.indexOf("Why this lane?")).toBeLessThan(illustrated.indexOf("![Lane map]"));
     expect(illustrated).toContain("_Decision path:");
   });
   it("keeps totals before capping and prioritizes late raisers without mutating input", () => {
@@ -94,7 +95,7 @@ describe("review.lane_map flag", () => {
     agg.lane = "review";
     agg.labelReasons = ["PR template missing <required> section"];
     const body = renderComment({ agg, mode: "rules-only", tokensEstimate: 0, notes: [], laneMap: true });
-    expect(body).toContain("raised by PR template missing \\<required\\> section");
+    expect(body).toContain("needs review: PR template missing \\<required\\> section");
     expect(body).toContain("`auto 1` · 🟡 `review 0` · 🔴 `block 0`");
     expect(body).not.toContain("**raiser**");
   });

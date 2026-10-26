@@ -49,3 +49,29 @@ describe("AI reason and lane explanation", () => {
     expect(mk([file({}), file({ path: "b.py" })])).toContain("Why this lane? Details");
   });
 });
+
+describe("sticky report order", () => {
+  for (const laneMap of [false, true]) for (const count of [1, 30]) {
+    it(`orders ${count} files with lane map ${laneMap}`, () => {
+      const files = Array.from({ length: count }, (_, i) => ({ path: `src/${i}.ts`, lane: "review" as const, reasons: ["review reason"] }));
+      const input = { ...agg, lane: "block" as const, files, rubric: [
+        { id: "info", severity: "low" as const, verdict: "fail" as const, justification: "informational detail" },
+        { id: "blocker", severity: "high" as const, verdict: "fail" as const, justification: "blocking detail", raiseTo: "block" as const },
+      ] };
+      const before = JSON.stringify(input);
+      const md = renderComment({ agg: input, mode: "model", tokensEstimate: 1, laneMap,
+        notes: ["AI budget exhausted", "quiet-evidence suppressed comments", "Skipped files: vendor/a.ts"],
+        fileFindings: [{ path: "src/0.ts", message: "unverified detail" }] });
+      const sections = ["**Overall lane:**", "Why this lane?", "### Findings", "#### Block", "blocking detail", "#### Review", "#### Informational", "informational detail",
+        ...(laneMap ? ["### 🗺️ Lane choice map"] : []), "### Coverage gaps", "AI budget exhausted", "unverified detail"];
+      for (let i = 1; i < sections.length; i++) {
+        expect(md.indexOf(sections[i - 1]!)).toBeGreaterThanOrEqual(0);
+        expect(md.indexOf(sections[i]!)).toBeGreaterThan(md.indexOf(sections[i - 1]!));
+      }
+      expect(md.match(/Overall lane:/g)).toHaveLength(1);
+      expect(md.match(/Why this lane\? /g)).toHaveLength(1);
+      expect(md).toContain("quiet-evidence suppressed comments");
+      expect(JSON.stringify(input)).toBe(before);
+    });
+  }
+});
