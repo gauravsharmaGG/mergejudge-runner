@@ -21849,7 +21849,7 @@ ${indent}${line}` : "\n";
           str2 += ",";
         } else if (ctx.options.trailingComma) {
           if (ctx.options.lineWidth > 0) {
-            reqNewline || (reqNewline = lines.reduce((sum, line) => sum + line.length + 2, 2) + (str2.length + 2) > ctx.options.lineWidth);
+            reqNewline || (reqNewline = lines.reduce((sum2, line) => sum2 + line.length + 2, 2) + (str2.length + 2) > ctx.options.lineWidth);
           }
           if (reqNewline) {
             str2 += ",";
@@ -21865,7 +21865,7 @@ ${indent}${line}` : "\n";
         return start + end;
       } else {
         if (!reqNewline) {
-          const len = lines.reduce((sum, line) => sum + line.length + 2, 2);
+          const len = lines.reduce((sum2, line) => sum2 + line.length + 2, 2);
           reqNewline = ctx.options.lineWidth > 0 && len > ctx.options.lineWidth;
         }
         if (reqNewline) {
@@ -35056,13 +35056,13 @@ var CC_SANITIZE = /[- ]/g;
 function isLuhnAlgo(digits) {
   let length = digits.length;
   let bit = 1;
-  let sum = 0;
+  let sum2 = 0;
   while (length) {
     const value = digits.charCodeAt(--length) - 48;
     bit ^= 1;
-    sum += bit ? [0, 2, 4, 6, 8, 1, 3, 5, 7, 9][value] : value;
+    sum2 += bit ? [0, 2, 4, 6, 8, 1, 3, 5, 7, 9][value] : value;
   }
-  return sum % 10 === 0;
+  return sum2 % 10 === 0;
 }
 function isValidCreditCard(input2) {
   if (!creditCard.test(input2))
@@ -57556,6 +57556,208 @@ function parseToolArgs(raw) {
   }
 }
 
+// core/bundling.ts
+var MAX_FILES_WITH_PATCH = 8;
+var MAX_TOTAL_PATCH_CHARS = 25e3;
+var SUMMARY_CAP = 600;
+var patchLen = (f) => f.patch?.length ?? 0;
+var hasPatch = (f) => patchLen(f) > 0;
+function shouldBundle(files) {
+  let n = 0, chars = 0;
+  for (const f of files) if (hasPatch(f)) {
+    n++;
+    chars += patchLen(f);
+  }
+  return n > MAX_FILES_WITH_PATCH || chars > MAX_TOTAL_PATCH_CHARS;
+}
+var dirOf2 = (p) => p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
+var baseOf2 = (p) => p.slice(p.lastIndexOf("/") + 1);
+function stemOf(path2) {
+  let b = baseOf2(path2);
+  const dot = b.lastIndexOf(".");
+  if (dot > 0) b = b.slice(0, dot);
+  let variant = false;
+  const strip = (re) => {
+    const n = b.replace(re, "");
+    if (n !== b && n) {
+      b = n;
+      variant = true;
+    }
+  };
+  strip(/\.(test|spec)$/i);
+  strip(/\.d$/i);
+  strip(/^test_/i);
+  strip(/_test$/i);
+  return { stem: b.toLowerCase(), variant };
+}
+var IMPORT_RES = [/\bfrom\s+["'](\.{1,2}\/[^"']+)["']/g, /\brequire\(\s*["'](\.{1,2}\/[^"']+)["']\s*\)/g, /^\+?\s*#include\s+"([^"]+)"/gm];
+function resolveRel(dir, rel) {
+  const out = dir ? dir.split("/") : [];
+  for (const seg of rel.split("/")) {
+    if (seg === "." || seg === "") continue;
+    if (seg === "..") out.pop();
+    else out.push(seg);
+  }
+  return out.join("/");
+}
+var stripExt = (p) => p.replace(/\.[A-Za-z0-9]+$/, "");
+function bundleFiles(files, maxFilesPerBundle = 6, maxPatchCharsPerBundle = 25e3) {
+  if (!shouldBundle(files)) return [Array.from(files)];
+  const patched = files.filter(hasPatch);
+  const patchless = files.filter((f) => !hasPatch(f));
+  const parent = patched.map((_, i) => i);
+  const find = (i) => {
+    while (parent[i] !== i) {
+      parent[i] = parent[parent[i]];
+      i = parent[i];
+    }
+    return i;
+  };
+  const union2 = (a, b) => {
+    const ra = find(a), rb = find(b);
+    if (ra !== rb) parent[Math.max(ra, rb)] = Math.min(ra, rb);
+  };
+  const byStem = /* @__PURE__ */ new Map();
+  patched.forEach((f, i) => {
+    const { stem, variant } = stemOf(f.path);
+    const g = byStem.get(stem) ?? { idx: [], variant: false };
+    g.idx.push(i);
+    g.variant ||= variant;
+    byStem.set(stem, g);
+  });
+  for (const g of byStem.values()) if (g.variant) for (const i of g.idx.slice(1)) union2(g.idx[0], i);
+  const byNoExt = /* @__PURE__ */ new Map();
+  patched.forEach((f, i) => {
+    const k = stripExt(f.path);
+    if (!byNoExt.has(k)) byNoExt.set(k, i);
+  });
+  patched.forEach((f, i) => {
+    const dir = dirOf2(f.path);
+    for (const re of IMPORT_RES) {
+      re.lastIndex = 0;
+      for (let m = re.exec(f.patch ?? ""); m; m = re.exec(f.patch ?? "")) {
+        const target = resolveRel(dir, m[1]);
+        const hit = byNoExt.get(stripExt(target)) ?? byNoExt.get(`${target}/index`);
+        if (hit !== void 0) union2(i, hit);
+      }
+    }
+  });
+  const sizes = /* @__PURE__ */ new Map();
+  patched.forEach((_, i) => sizes.set(find(i), (sizes.get(find(i)) ?? 0) + 1));
+  const byDir = /* @__PURE__ */ new Map();
+  patched.forEach((f, i) => {
+    if (sizes.get(find(i)) !== 1) return;
+    const d = dirOf2(f.path);
+    const first = byDir.get(d);
+    if (first === void 0) byDir.set(d, i);
+    else union2(first, i);
+  });
+  const clusters = /* @__PURE__ */ new Map();
+  patched.forEach((f, i) => {
+    const r = find(i);
+    const c = clusters.get(r) ?? [];
+    c.push(f);
+    clusters.set(r, c);
+  });
+  const bundles = [];
+  let cur = [];
+  let curChars = 0;
+  const flush = () => {
+    if (cur.length) bundles.push(cur);
+    cur = [];
+    curChars = 0;
+  };
+  for (const cluster of [...clusters.entries()].sort((a, b) => a[0] - b[0]).map((e) => e[1])) {
+    const clusterChars = cluster.reduce((n, f) => n + patchLen(f), 0);
+    if (cur.length && (cur.length + cluster.length > maxFilesPerBundle || curChars + clusterChars > maxPatchCharsPerBundle)) flush();
+    for (const f of cluster) {
+      if (cur.length && (cur.length >= maxFilesPerBundle || curChars + patchLen(f) > maxPatchCharsPerBundle)) flush();
+      cur.push(f);
+      curChars += patchLen(f);
+    }
+  }
+  flush();
+  if (patchless.length) bundles[0].push(...patchless);
+  return bundles;
+}
+var laneOf = (m, path2) => m.get(path2)?.lane ?? "auto";
+var VERDICT_RANK = { fail: 3, pass: 2, unverified: 1, "n/a": 0 };
+var SEVERITY_RANK = { block: 3, high: 3, review: 2, medium: 2, low: 1 };
+function mergeRubric(parts) {
+  const byId = /* @__PURE__ */ new Map();
+  for (const r of parts.flatMap((p) => p.rubric)) {
+    const prev = byId.get(r.id);
+    if (!prev) {
+      byId.set(r.id, r);
+      continue;
+    }
+    const a = VERDICT_RANK[r.verdict] ?? 0, b = VERDICT_RANK[prev.verdict] ?? 0;
+    if (a > b) byId.set(r.id, r);
+    else if (a === b && a > 0 && (SEVERITY_RANK[String(r.severity)] ?? 0) > (SEVERITY_RANK[String(prev.severity)] ?? 0)) byId.set(r.id, r);
+  }
+  return [...byId.values()];
+}
+function mergeBundleTriages(parts, opts = {}) {
+  const files = /* @__PURE__ */ new Map();
+  for (const p of parts) {
+    for (const [path2, v] of p.files) {
+      const prev = files.get(path2);
+      if (!prev) files.set(path2, v);
+      else files.set(path2, LANE_ORDER[v.lane] > LANE_ORDER[prev.lane] ? { lane: maxLane(prev.lane, v.lane), reason: v.reason } : prev);
+    }
+  }
+  const seen = /* @__PURE__ */ new Set();
+  const findings = [];
+  for (const f of parts.flatMap((p) => p.findings)) {
+    const key = `${f.path}:${f.line ?? "file"}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    findings.push(f);
+  }
+  const order = new Map(findings.map((f, i) => [f, i]));
+  findings.sort((a, b) => LANE_ORDER[laneOf(files, b.path)] - LANE_ORDER[laneOf(files, a.path)] || (a.line ?? Infinity) - (b.line ?? Infinity) || order.get(a) - order.get(b));
+  const summary2 = parts.map((p) => p.summary.trim()).filter(Boolean).join(" \xB7 ").slice(0, SUMMARY_CAP);
+  return { summary: summary2, files, findings: findings.slice(0, opts.findingsCap ?? MAX_FINDINGS), rubric: mergeRubric(parts) };
+}
+var sum = (xs) => xs.reduce((n, x) => n + (x ?? 0), 0);
+var sumOpt = (xs) => xs.some((x) => x !== void 0) ? sum(xs) : void 0;
+function mergeBundleResults(results) {
+  const llms = results.map((r) => r.llm).filter((l) => l !== null);
+  const bs = results.map((r) => r.breakdown);
+  const breakdown = {
+    system: sum(bs.map((b) => b.system)),
+    policy: sum(bs.map((b) => b.policy)),
+    rubric: sum(bs.map((b) => b.rubric)),
+    diff: sum(bs.map((b) => b.diff)),
+    output: sum(bs.map((b) => b.output)),
+    total: sum(bs.map((b) => b.total)),
+    skipped_diff_files: [...new Set(bs.flatMap((b) => b.skipped_diff_files))]
+  };
+  for (const k of ["context", "tools", "tool_calls", "second_pass"]) {
+    const v = sumOpt(bs.map((b) => b[k]));
+    if (v !== void 0) breakdown[k] = v;
+  }
+  const error63 = llms.length ? void 0 : results.find((r) => r.error)?.error;
+  const limit = results.find((r) => r.outputLimit !== void 0)?.outputLimit;
+  return {
+    llm: llms.length ? mergeBundleTriages(llms) : null,
+    ...error63 ? { error: error63 } : {},
+    tokensEstimate: sum(results.map((r) => r.tokensEstimate)),
+    breakdown,
+    retried: results.some((r) => r.retried),
+    ...results.some((r) => r.truncated) ? { truncated: true } : {},
+    ...limit !== void 0 ? { outputLimit: limit } : {}
+  };
+}
+function filterContext(context3, files) {
+  if (!context3?.length) return context3;
+  const paths = new Set(files.map((f) => f.path));
+  const dirs = new Set(files.map((f) => dirOf2(f.path)));
+  const bases = files.map((f) => baseOf2(f.path));
+  const kept = context3.filter((c) => paths.has(c.path) || dirs.has(dirOf2(c.path)) || bases.some((b) => c.why.includes(b)));
+  return kept.length ? kept : context3;
+}
+
 // core/triage.ts
 var DELIM = "untrusted_pr_data";
 var SYSTEM_PROMPT = `You are MergeJudge, a pull request risk triager.
@@ -57874,6 +58076,18 @@ function retryInstruction(truncated) {
   return `REPAIR: ${reason}. ${COMPACT_JSON_INSTRUCTION} Reply with ONLY a single JSON object matching the schema. No markdown fences, no prose.`;
 }
 async function runTriage(provider, input2, cfg, ctx = {}, log = () => {
+}, warn = log) {
+  if (!shouldBundle(input2.files)) return runTriageOnce(provider, input2, cfg, ctx, log, warn);
+  const bundles = bundleFiles(input2.files);
+  log(`Large PR: triaging ${bundles.length} semantic bundles.`);
+  const results = [];
+  for (let i = 0; i < bundles.length; i += 2) {
+    const got = await Promise.all(bundles.slice(i, i + 2).map((files) => runTriageOnce(provider, { ...input2, files, context: filterContext(input2.context, files) }, cfg, ctx, log, warn)));
+    results.push(...got);
+  }
+  return mergeBundleResults(results);
+}
+async function runTriageOnce(provider, input2, cfg, ctx = {}, log = () => {
 }, warn = log) {
   const system = buildSystemPrompt(ctx) + codeAutoPrompt(input2.files, cfg) + (input2.context?.length ? `
 
@@ -58736,7 +58950,15 @@ function verifyFindingEvidence(finding, files) {
 }
 
 // src/ai.ts
-var SECOND_PASS_RULES = `Second pass (ai.mode deep). The numbered diff is the only evidence that a finding may cite. Look for defects a single hunk can hide: cross-hunk logic, concurrency, security, data loss and API contract breaks. Before you report a finding, try to falsify it from the diff: a guard on another line, a type that makes the bug impossible, or a change that is only style or wording. Report it only when you cannot falsify it.
+var SECOND_PASS_RULES = `Second pass (ai.mode deep). Diff Anchor Rule: every finding's "line" and "quote" MUST still cite an exact changed or context line in the numbered diff of files. CONTEXT (full changed files, hop-1/hop-2 callers, imports, patch literals, tests) is valid evidence to prove that a diff line breaks a caller, callee, or cross-file contract.
+Protected Defect Categories (prefer keeping these unless Ground A or B applies):
+1. Cross-file caller/callee signature, parameter order, or return-type/nullability mismatch.
+2. Concurrency race, lock/channel/goroutine leak, or unawaited async error in try/catch.
+3. Security vulnerability (command/SQL/template/workflow injection, auth/permission bypass, secret leak).
+4. Partial-failure or exception path leaving state, transactions, or resources corrupted or unclosed.
+5. Null/undefined/bounds crash on reachable inputs.
+Falsification Rule: a candidate in a Protected Category may ONLY be dropped if Ground A (the quoted symbol or code does not exist in the diff) OR Ground B (a specific line in the diff or retrieved CONTEXT literally guards against, handles, or contradicts the claim). Never drop a cross-file contract break just because the broken caller lives in CONTEXT rather than inside the diff hunk itself: cite the diff line that changed the contract and name the caller path from CONTEXT in "message".
+Look for defects a single hunk can hide. Before you report a finding, try to falsify it. For protected categories use only Ground A or B; for other findings, also try a guard on another line, a type that makes the bug impossible, or a change that is only style or wording. Report it only when you cannot falsify it.
 Each finding MUST include "quote" copied verbatim from that file's diff, without the L<n> prefix. A finding whose quote is not in the diff is dropped and does not count. Do not repeat a finding you were already shown. You may only raise a file lane (auto, review, block). You cannot lower one. auto means low risk, not a guarantee. Deterministic base-branch rules remain the floor.
 Respond with ONLY strict JSON, no prose, no code fences:
 {"summary":"<what this pass added, or empty>","files":[{"path":"<exact path from the input>","lane":"auto|review|block","reason":"<short reason>","findings":[{"line":<new-file line number>,"quote":"<exact diff line>","message":"<short concrete issue>"}]}]}`;
@@ -58935,6 +59157,7 @@ async function produceReviewResult(o) {
     let mode = cfg.review.mode;
     let tools;
     let retrievedDeep = false;
+    let deepSnap;
     let retrieved = mode === "deep" ? o.retrieved : void 0;
     if (mode === "deep" && !retrieved && o.retrieveDeep) {
       try {
@@ -58967,6 +59190,7 @@ async function produceReviewResult(o) {
         else {
           for (const n of prep.notes) log.info(`deep: ${n}`);
           if (prep.partial) notes.push(`Deep mode ${prep.partial}.`);
+          deepSnap = prep.snap;
           tools = deepTools({ snap: prep.snap, readFile: (p) => o.deep.head.readFile(p), skip, semantic: prep.semantic });
         }
       }
@@ -58981,7 +59205,17 @@ async function produceReviewResult(o) {
     const tctx = { policyText: policies.text, criteria, learnedText: cfg.learning.enabled ? o.learnedLines ? renderLearnedSection(o.learnedLines, DELIM) : buildLearnedContext({ learned: o.learned, lessons: o.lessons, outcomeStats: o.outcomeStats }, DELIM) : "", skippedDiffFiles: skipped, ref: o.ref ?? `#${pr.number}` };
     let res = mode === "deep" && tools && canUseTools(provider) ? await runDeepTriage(provider, prompt, cfg, tctx, { tools }, log.info, log.warning) : await runTriage(provider, prompt, cfg, tctx, log.info, log.warning);
     if (res.llm && aiModeOf(cfg) === "deep") {
-      const second = await runSecondPass(provider, prompt, cfg, tctx, res.llm, log.info);
+      const secondPrompt = { ...prompt };
+      if (!secondPrompt.context?.length) {
+        const skip = (p) => excludeFromLlm([{ path: p }], cfg.diff_exclude).skipped.length > 0;
+        try {
+          if (deepSnap) secondPrompt.context = (await retrieveDeepContext(deepSnap, kept, { skip }, log.info)).pieces;
+          else if (o.contextSource) secondPrompt.context = (await gatherContext(kept, o.contextSource, { ...cfg.context, skip }, log.info)).pieces;
+        } catch (e) {
+          log.warning(`second pass context unavailable: ${e.message}`);
+        }
+      }
+      const second = await runSecondPass(provider, secondPrompt, cfg, tctx, res.llm, log.info);
       if (second.note) notes.push(second.note);
       log.info(second.logLine);
       res = {

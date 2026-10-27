@@ -5,6 +5,7 @@ import { classifyLlmFailure, formatLlmFailure, LlmError } from "./llm/http.js";
 import { completeWithMeta, type LlmProvider } from "./llm/provider.js";
 import type { ContextPiece } from "./context.js";
 import type { Lane, PrFile } from "./types.js";
+import { bundleFiles, filterContext, mergeBundleResults, shouldBundle } from "./bundling.js";
 import { classifyFiles } from "./rules.js";
 import { buildLanguageRulesPrompt } from "./langrules.js";
 import { criteriaPrompt, evaluateRubric, quoteInPatch, relocateQuoteAcrossFiles, resolveLineFromQuote, rubricOutputSchema, type Criterion, type RubricResult } from "./rubrics.js";
@@ -407,6 +408,22 @@ export function retryInstruction(truncated: boolean): string {
 }
 
 export async function runTriage(
+  provider: LlmProvider, input: PromptInput, cfg: Config, ctx: PromptContext & { skippedDiffFiles?: string[] } = {},
+  log: (m: string) => void = () => {}, warn: (m: string) => void = log,
+): Promise<TriageResult> {
+  if (!shouldBundle(input.files)) return runTriageOnce(provider, input, cfg, ctx, log, warn);
+  const bundles = bundleFiles(input.files);
+  log(`Large PR: triaging ${bundles.length} semantic bundles.`);
+  const results: TriageResult[] = [];
+  for (let i = 0; i < bundles.length; i += 2) {
+    const got = await Promise.all(bundles.slice(i, i + 2).map((files) =>
+      runTriageOnce(provider, { ...input, files, context: filterContext(input.context, files) }, cfg, ctx, log, warn)));
+    results.push(...got);
+  }
+  return mergeBundleResults(results);
+}
+
+async function runTriageOnce(
   provider: LlmProvider, input: PromptInput, cfg: Config, ctx: PromptContext & { skippedDiffFiles?: string[] } = {},
   log: (m: string) => void = () => {}, warn: (m: string) => void = log,
 ): Promise<TriageResult> {

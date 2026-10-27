@@ -10,7 +10,9 @@ import { applyLearned, type LearnedItem } from "./falsealarm.js";
 import { buildLearnedContext, renderLearnedSection, type LearnedInput } from "./learnedctx.js";
 import { isLearningBranchHead, isProposalBranchHead } from "./learning.js";
 import { deepTools, runDeepTriage } from "./deep.js";
-import { prepareDeepIndex, type DeepEnv } from "./deepsetup.js";
+import { retrieveDeepContext } from "./deepretrieve.js";
+import type { IndexSnapshot } from "./deepindex.js";
+import { prepareDeepIndex,type DeepEnv } from "./deepsetup.js";
 import { createProvider, type LlmCallUsage, type WorkersAiBinding } from "./llm/index.js";
 import type { LlmProvider } from "./llm/provider.js";
 import { canUseTools } from "./llm/provider.js";
@@ -257,6 +259,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
     let mode: "diff" | "context" | "deep" = cfg.review.mode;
     let tools: ReturnType<typeof deepTools> | undefined;
     let retrievedDeep = false;
+    let deepSnap: IndexSnapshot | undefined;
     let retrieved = mode === "deep" ? o.retrieved : undefined;
     if (mode === "deep" && !retrieved && o.retrieveDeep) {
       try {
@@ -290,6 +293,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
         else {
           for (const n of prep.notes) log.info(`deep: ${n}`);
           if (prep.partial) notes.push(`Deep mode ${prep.partial}.`);
+          deepSnap = prep.snap;
           tools = deepTools({ snap: prep.snap, readFile: (p) => o.deep!.head.readFile(p), skip, semantic: prep.semantic });
         }
       }
@@ -308,7 +312,18 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
     // ai.mode deep: a second pass over the same numbered diff. Findings from that pass need a
     // verified quote. File lanes can only rise. Base-branch rules stay the floor inside aggregate.
     if (res.llm && aiModeOf(cfg) === "deep") {
-      const second = await runSecondPass(provider, prompt, cfg, tctx, res.llm, log.info);
+      // Pass 2 always sees retrieved CONTEXT, even when Pass 1 ran tool-driven with an empty prompt context.
+      const secondPrompt = { ...prompt };
+      if (!secondPrompt.context?.length) {
+        const skip = (p: string) => excludeFromLlm([{ path: p }], cfg.diff_exclude).skipped.length > 0;
+        try {
+          if (deepSnap) secondPrompt.context = (await retrieveDeepContext(deepSnap, kept, { skip }, log.info)).pieces;
+          else if (o.contextSource) secondPrompt.context = (await gatherContext(kept, o.contextSource, { ...cfg.context, skip }, log.info)).pieces;
+        } catch (e) {
+          log.warning(`second pass context unavailable: ${(e as Error).message}`);
+        }
+      }
+      const second = await runSecondPass(provider, secondPrompt, cfg, tctx, res.llm, log.info);
       if (second.note) notes.push(second.note);
       log.info(second.logLine);
       res = {
