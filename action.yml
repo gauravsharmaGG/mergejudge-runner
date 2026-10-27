@@ -1,5 +1,5 @@
 name: MergeJudge AI Code Review
-description: "AI code review for pull requests: auto/review/block lanes and line comments. Bring your own AI key, or run rules-only."
+description: "Open-source AI pull request reviewer: sorts every PR into auto, review or block. Rules first, your own AI key."
 author: MergeJudge contributors
 branding:
   icon: git-pull-request

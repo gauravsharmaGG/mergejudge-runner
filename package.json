@@ -1,9 +1,9 @@
 {
   "name": "mergejudge-runner",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "license": "MIT",
   "type": "module",
-  "description": "Run MergeJudge pull-request reviews on your own machine with your own Claude Code, Codex or GLM login",
+  "description": "Open-source AI code review tool and GitHub Action for pull requests: deterministic base-branch rules (auto, review, block) + AST and LLM verification (Claude Code, Codex, OpenAI, Anthropic, Ollama, GLM).",
   "engines": {
     "node": ">=20"
   },
@@ -25,7 +25,7 @@
     "prepublishOnly": "npm run build",
     "build:action": "esbuild src/action.ts --bundle --platform=node --target=node24 --format=cjs --legal-comments=eof --log-level=warning --outfile=action/index.cjs"
   },
-  "homepage": "https://github.com/gauravsharmaGG/mergejudge-runner#readme",
+  "homepage": "https://mergejudge.si",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/gauravsharmaGG/mergejudge-runner.git"
@@ -35,13 +35,18 @@
   },
   "keywords": [
     "mergejudge",
+    "open-source-ai-code-review",
+    "ai-code-review",
     "code-review",
     "pull-request",
+    "pull-request-reviewer",
+    "github-action",
+    "ollama",
+    "self-hosted",
+    "byok",
     "claude-code",
     "codex",
     "glm",
-    "ai-code-review",
-    "github",
     "runner"
   ],
   "publishConfig": {
