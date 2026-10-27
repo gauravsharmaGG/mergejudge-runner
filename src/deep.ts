@@ -5,7 +5,7 @@
  * Deterministic base-branch rules stay the floor. auto means low risk, not a guarantee.
  */
 import type { Config } from "../core/config.js";
-import { quoteInPatch } from "../core/rubrics.js";
+import { quoteInPatch, relocateQuoteAcrossFiles, resolveLineFromQuote } from "../core/rubrics.js";
 import { diffLines, type Finding } from "../core/triage.js";
 import type { PrFile } from "../core/types.js";
 import { ConfigError } from "./config.js";
@@ -79,10 +79,15 @@ export function verifyFindingEvidence(
   const message = finding.message?.trim().slice(0, 300) ?? "";
   if (!path || !message) return null;
   const file = files.find((f) => f.path === path);
-  if (!file) return null;
   const quote = finding.quote?.trim().slice(0, 200);
-  if (!quote || !quoteInPatch(quote, file.patch)) return null;
-  const line = finding.line;
-  if (line === undefined || !Number.isInteger(line) || line <= 0 || !diffLines(file.patch).has(line)) return null;
-  return { path: file.path, line, quote, message };
+  if (!quote) return null;
+  const hint = finding.line !== undefined && Number.isInteger(finding.line) && finding.line > 0 ? finding.line : undefined;
+  if (file && quoteInPatch(quote, file.patch)) {
+    const resolved = resolveLineFromQuote(quote, file.patch, hint);
+    if (resolved !== null) return { path: file.path, line: resolved, quote, message };
+    if (hint !== undefined && diffLines(file.patch).has(hint)) return { path: file.path, line: hint, quote, message };
+    return null;
+  }
+  const moved = relocateQuoteAcrossFiles(quote, files, hint);
+  return moved ? { path: moved.path, line: moved.line, quote, message } : null;
 }

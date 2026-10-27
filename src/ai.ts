@@ -8,6 +8,7 @@
  */
 import { resolveOutputLimit, retryOutputLimit } from "../core/budget.js";
 import type { Config } from "../core/config.js";
+import { buildLanguageRulesPrompt } from "../core/langrules.js";
 import { classifyLlmFailure, formatLlmFailure } from "../core/llm/http.js";
 import { completeWithMeta, type LlmProvider } from "../core/llm/provider.js";
 import {
@@ -117,7 +118,7 @@ export async function runSecondPass(
   first: LlmTriage,
   log: (m: string) => void = () => {},
 ): Promise<SecondPassOutcome> {
-  const system = SECOND_PASS_RULES + policyBlock(ctx.policyText);
+  const system = SECOND_PASS_RULES + policyBlock(ctx.policyText) + buildLanguageRulesPrompt(input.files);
   const built = buildUserPrompt(input, cfg, system);
   const user = built.prompt + priorBlock(first.findings);
   const limit = resolveOutputLimit(cfg);

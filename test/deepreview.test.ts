@@ -47,8 +47,9 @@ describe("verifyFindingEvidence", () => {
   it("drops a finding whose quote is missing, unknown, or off the diff", () => {
     expect(verifyFindingEvidence({ path: "docs/guide.md", line: 2, message: "no quote" }, [docs])).toBeNull();
     expect(verifyFindingEvidence({ path: "docs/guide.md", line: 2, quote: "nope not here", message: "invented" }, [docs])).toBeNull();
-    expect(verifyFindingEvidence({ path: "other.ts", line: 2, quote: QUOTE, message: "wrong file" }, [docs])).toBeNull();
-    expect(verifyFindingEvidence({ path: "docs/guide.md", line: 9, quote: QUOTE, message: "bad line" }, [docs])).toBeNull();
+    expect(verifyFindingEvidence({ path: "other.ts", line: 2, quote: QUOTE, message: "wrong file" }, [docs])).toEqual({ path: "docs/guide.md", line: 2, quote: QUOTE, message: "wrong file" });
+    expect(verifyFindingEvidence({ path: "other.ts", line: 2, quote: QUOTE, message: "ambiguous" }, [docs, workflow])).toBeNull();
+    expect(verifyFindingEvidence({ path: "docs/guide.md", line: 9, quote: QUOTE, message: "bad line" }, [docs])?.line).toBe(2);
     expect(verifyFindingEvidence({ path: "docs/guide.md", line: 2, quote: "abc", message: "too short" }, [docs])).toBeNull();
   });
 });
@@ -113,9 +114,9 @@ describe("ai.mode deep", () => {
     });
     expect(n).toBe(2);
     expect(result.lane).toBe("review");
-    expect(result.findings.map((f) => f.message)).toEqual(["balance can go negative"]);
+    expect(result.findings.map((f) => f.message)).toEqual(["balance can go negative", "line is not in the hunk"]);
     expect(result.findings[0]).toMatchObject({ line: 2, quote: QUOTE });
-    expect(result.body).toContain("Second pass kept 1 finding");
+    expect(result.body).toContain("Second pass kept 2 finding");
     expect(result.body).not.toContain("this line was never in the diff");
     expect(result.usage.breakdown?.second_pass).toBeGreaterThan(0);
   });

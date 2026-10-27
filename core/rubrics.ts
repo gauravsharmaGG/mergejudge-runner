@@ -125,6 +125,60 @@ export function quoteInPatch(quote: string, patch: string | undefined): boolean 
   return q.length >= 4 && norm(patch ?? "").includes(q);
 }
 
+interface NewLine { n: number; text: string; added: boolean }
+
+/** New-file lines (added + context) of a unified diff, same hunk walk as `diffLines`. */
+function newFileLines(patch: string): NewLine[] {
+  const out: NewLine[] = [];
+  let n = 0;
+  let inHunk = false;
+  for (const line of patch.split("\n")) {
+    const h = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (h) { n = Number(h[1]); inHunk = true; continue; }
+    if (!inHunk || line.startsWith("\\") || line.startsWith("-")) continue;
+    out.push({ n, text: norm(line.slice(1)), added: line.startsWith("+") });
+    n++;
+  }
+  return out;
+}
+
+const MAX_SPAN = 8;
+
+/**
+ * New-file line a verbatim `quote` sits on (the last line of a multi-line quote), or null when it is not in the patch.
+ * Keeps `hintLine` when it matches; otherwise picks the match nearest the hint (added beats context, then earlier).
+ */
+export function resolveLineFromQuote(quote: string, patch: string | undefined, hintLine?: number): number | null {
+  if (!patch || !quoteInPatch(quote, patch)) return null;
+  const parts = quote.split("\n").map((l) => l.trim().replace(/^L\d+\s+/, "").replace(/^[+-]\s*/, "")).filter(Boolean);
+  const q = norm(parts.join(" "));
+  if (q.length < 4) return null;
+  const lines = newFileLines(patch);
+  const hits: NewLine[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    let joined = "";
+    for (let j = i; j < lines.length && j < i + MAX_SPAN; j++) {
+      if (j > i && lines[j]!.n !== lines[j - 1]!.n + 1) break;
+      joined = joined ? `${joined} ${lines[j]!.text}` : lines[j]!.text;
+      if (joined.includes(q)) { hits.push(lines[j]!); break; }
+    }
+  }
+  if (!hits.length) return null;
+  if (hintLine !== undefined && hits.some((l) => l.n === hintLine)) return hintLine;
+  const hint = hintLine ?? 0;
+  hits.sort((a, b) => Math.abs(a.n - hint) - Math.abs(b.n - hint) || Number(b.added) - Number(a.added) || a.n - b.n);
+  return hits[0]!.n;
+}
+
+/** Path + line of the one file whose patch holds `quote`; null for zero or several candidates (never guess). */
+export function relocateQuoteAcrossFiles(quote: string, files: readonly PrFile[], hintLine?: number): { path: string; line: number } | null {
+  const cands = files.filter((f) => f.patch && quoteInPatch(quote, f.patch));
+  if (cands.length !== 1) return null;
+  const c = cands[0]!;
+  const line = resolveLineFromQuote(quote, c.patch, hintLine);
+  return line === null ? null : { path: c.path, line };
+}
+
 /**
  * Validate LLM rubric output against known criteria and the diff:
  * a fail only counts (and can raise the lane) if its evidence quote appears in that file's patch.
@@ -146,12 +200,16 @@ export function evaluateRubric(raw: RubricRaw, criteria: Criterion[], files: PrF
       score = Math.min(5, Math.max(1, Math.round(r.result)));
       verdict = score <= 2 ? "fail" : "pass";
     } else verdict = r.result;
-    const ev = r.evidence && r.evidence.quote.trim()
+    let ev: RubricResult["evidence"] = r.evidence && r.evidence.quote.trim()
       ? { path: r.evidence.path, ...(r.evidence.line !== undefined ? { line: r.evidence.line } : {}), quote: r.evidence.quote.slice(0, 200) }
       : undefined;
     if (verdict === "fail") {
       const p = ev ? patches.get(ev.path) : undefined;
-      if (!ev || p === undefined || !quoteInPatch(ev.quote, p)) verdict = "unverified";
+      if (!ev || p === undefined || !quoteInPatch(ev.quote, p)) {
+        const moved = ev ? relocateQuoteAcrossFiles(ev.quote, files, ev.line) : null;
+        if (ev && moved) ev = { path: moved.path, line: moved.line, quote: ev.quote };
+        else verdict = "unverified";
+      }
     }
     out.push({
       id: c.id,

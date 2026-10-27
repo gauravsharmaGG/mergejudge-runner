@@ -1,4 +1,5 @@
 import type { Config } from "./config.js";
+import { buildLanguageRulesPrompt } from "./langrules.js";
 import { chunkById, findReferences, isSensitivePath, searchSymbols, type IndexSnapshot } from "./deepindex.js";
 import { COMPACT_JSON_INSTRUCTION, resolveOutputLimit, retryOutputLimit } from "./budget.js";
 import { classifyLlmFailure, formatLlmFailure, LlmError } from "./llm/http.js";
@@ -137,7 +138,7 @@ export async function runDeepTriage(
 ): Promise<TriageResult> {
   const now = opts.now ?? Date.now;
   const started = now();
-  const system = buildSystemPrompt(ctx) + codeAutoPrompt(input.files, cfg) + `\n\n${deepRules(cfg, opts.tools)}`;
+  const system = buildSystemPrompt(ctx) + codeAutoPrompt(input.files, cfg) + `\n\n${deepRules(cfg, opts.tools)}` + buildLanguageRulesPrompt(input.files);
   const { prompt, diffTokens } = buildUserPrompt({ ...input, context: undefined }, cfg, system);
   const messages: ChatMessage[] = [{ role: "user", content: prompt }];
   const skipped = ctx.skippedDiffFiles ?? [];
