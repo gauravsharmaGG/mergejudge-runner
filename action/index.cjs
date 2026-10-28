@@ -58951,14 +58951,7 @@ function verifyFindingEvidence(finding, files) {
 
 // src/ai.ts
 var SECOND_PASS_RULES = `Second pass (ai.mode deep). Diff Anchor Rule: every finding's "line" and "quote" MUST still cite an exact changed or context line in the numbered diff of files. CONTEXT (full changed files, hop-1/hop-2 callers, imports, patch literals, tests) is valid evidence to prove that a diff line breaks a caller, callee, or cross-file contract.
-Protected Defect Categories (prefer keeping these unless Ground A or B applies):
-1. Cross-file caller/callee signature, parameter order, or return-type/nullability mismatch.
-2. Concurrency race, lock/channel/goroutine leak, or unawaited async error in try/catch.
-3. Security vulnerability (command/SQL/template/workflow injection, auth/permission bypass, secret leak).
-4. Partial-failure or exception path leaving state, transactions, or resources corrupted or unclosed.
-5. Null/undefined/bounds crash on reachable inputs.
-Falsification Rule: a candidate in a Protected Category may ONLY be dropped if Ground A (the quoted symbol or code does not exist in the diff) OR Ground B (a specific line in the diff or retrieved CONTEXT literally guards against, handles, or contradicts the claim). Never drop a cross-file contract break just because the broken caller lives in CONTEXT rather than inside the diff hunk itself: cite the diff line that changed the contract and name the caller path from CONTEXT in "message".
-Look for defects a single hunk can hide. Before you report a finding, try to falsify it. For protected categories use only Ground A or B; for other findings, also try a guard on another line, a type that makes the bug impossible, or a change that is only style or wording. Report it only when you cannot falsify it.
+Look for defects a single hunk can hide: cross-hunk logic, concurrency, security, data loss and API contract breaks. Before you report a finding, try to falsify it from the diff and CONTEXT: a guard on another line, a type that makes the bug impossible, already handled elsewhere, or a change that is only style or wording. DROP candidates that are false alarms, purely speculative, or duplicates. Report a finding only when you cannot falsify it. Prefer high precision over volume.
 Each finding MUST include "quote" copied verbatim from that file's diff, without the L<n> prefix. A finding whose quote is not in the diff is dropped and does not count. Do not repeat a finding you were already shown. You may only raise a file lane (auto, review, block). You cannot lower one. auto means low risk, not a guarantee. Deterministic base-branch rules remain the floor.
 Respond with ONLY strict JSON, no prose, no code fences:
 {"summary":"<what this pass added, or empty>","files":[{"path":"<exact path from the input>","lane":"auto|review|block","reason":"<short reason>","findings":[{"line":<new-file line number>,"quote":"<exact diff line>","message":"<short concrete issue>"}]}]}`;

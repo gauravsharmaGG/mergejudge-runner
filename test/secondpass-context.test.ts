@@ -4,9 +4,12 @@ import { buildUserPrompt } from "../core/triage.js";
 import { applySecondPass, SECOND_PASS_RULES } from "../src/ai.js";
 
 describe("SECOND_PASS_RULES", () => {
-  it("is context-aware with protected categories and falsification grounds", () => {
-    for (const k of ["Diff Anchor Rule", "Protected Defect Categories", "Ground A", "Ground B", "CONTEXT", "low risk, not a guarantee"]) {
+  it("is context-aware and has no protected categories", () => {
+    for (const k of ["Diff Anchor Rule", "CONTEXT", "low risk, not a guarantee"]) {
       expect(SECOND_PASS_RULES).toContain(k);
+    }
+    for (const k of ["Protected Defect Categories", "Ground A", "Ground B"]) {
+      expect(SECOND_PASS_RULES).not.toContain(k);
     }
     expect(SECOND_PASS_RULES).not.toContain("only evidence");
     expect(SECOND_PASS_RULES).not.toMatch(/[—–→]/);
