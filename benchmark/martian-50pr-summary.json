@@ -1,0 +1,86 @@
+{
+  "product": "mergejudge-runner",
+  "version": "0.6.1",
+  "benchmark": {
+    "name": "Martian Code-Review-Bench",
+    "kind": "offline",
+    "upstream": "https://github.com/withmartian/code-review-benchmark",
+    "submission": "https://github.com/withmartian/code-review-benchmark/pull/70",
+    "pull_requests": 50,
+    "pull_requests_per_repository": 10,
+    "golden_comments_full": 173,
+    "golden_comments_core": 158,
+    "core_categories": [
+      "bug",
+      "security",
+      "concurrency",
+      "data",
+      "api",
+      "perf",
+      "test_gap",
+      "doc_defect"
+    ],
+    "judge_script": "step3_judge_comments.py",
+    "judge_model": "claude-sonnet-4-20250514",
+    "languages": [
+      { "language": "Python", "repository": "sentry", "pull_requests": 10 },
+      { "language": "Go", "repository": "grafana", "pull_requests": 10 },
+      { "language": "TypeScript", "repository": "cal.com", "pull_requests": 10 },
+      { "language": "Ruby", "repository": "discourse", "pull_requests": 10 },
+      { "language": "Java", "repository": "keycloak", "pull_requests": 10 }
+    ]
+  },
+  "model": "claude-sonnet-4-20250514",
+  "model_role": "judge",
+  "scoring": "Unmodified MergeJudge comments matched to Core-profile golden comments by the benchmark judge. One run. Comment-level counts.",
+  "definitions": {
+    "tp": "Tool comments the judge matched to a Core-profile golden comment.",
+    "fp": "Tool comments the judge did not match to a Core-profile golden comment.",
+    "fn": "Core-profile golden comments with no matching tool comment (golden_comments_core - tp).",
+    "precision": "tp / (tp + fp)",
+    "recall": "tp / (tp + fn)",
+    "f1": "2 * tp / (2 * tp + fp + fn)"
+  },
+  "modes": {
+    "default": {
+      "id": "fast",
+      "passes": 1,
+      "precision": 0.75,
+      "recall": 0.285,
+      "f1": 0.413,
+      "tp": 45,
+      "fp": 15,
+      "fn": 113,
+      "comments_per_pr": 1.2,
+      "avg_latency_seconds": 15
+    },
+    "deep": {
+      "id": "deep",
+      "passes": 2,
+      "precision": 0.759,
+      "recall": 0.38,
+      "f1": 0.506,
+      "tp": 60,
+      "fp": 19,
+      "fn": 98,
+      "comments_per_pr": 1.58,
+      "avg_latency_seconds": 28,
+      "subset_38_pull_requests": {
+        "pull_requests": 38,
+        "precision": 0.783,
+        "recall": 0.427,
+        "f1": 0.553,
+        "tp": 47,
+        "fp": 13,
+        "comments_per_pr": 1.58,
+        "avg_latency_seconds": 28
+      }
+    }
+  },
+  "rules_only": {
+    "provider": "none",
+    "external_model_api_calls": 0,
+    "scored_on_this_benchmark": false,
+    "note": "Deterministic rules set the minimum lane (review or block). They do not emit the model comments this benchmark scores. The AI pass can raise the lane and cannot lower this floor. auto means low risk, not a guarantee."
+  }
+}
