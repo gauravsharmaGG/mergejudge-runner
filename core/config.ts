@@ -181,8 +181,10 @@ export const configSchema = z.object({
       flow_chart_host: z.enum(["none", "branch"]).default("none"),
       /** Animate the SVG subway pulse or new/changed Mermaid edges. Only matters when flow_chart is on. */
       flow_chart_animate: z.boolean().default(true),
+      /** Opt-in: list each changed file's import neighbours (who imports it, what it imports) under the PR story. Deterministic, no AI call; explanatory only. */
+      where_it_sits: z.boolean().default(false),
     })
-    .default({ flow_chart: false, flow_chart_animate: true, flow_chart_style: "svg", flow_chart_host: "none" }),
+    .default({ flow_chart: false, flow_chart_animate: true, flow_chart_style: "svg", flow_chart_host: "none", where_it_sits: false }),
   /**
    * How many model passes run over the diff. `fast` (default) is the single pass.
    * `deep` adds a second pass for cross-hunk, concurrency, security, data and API defects.

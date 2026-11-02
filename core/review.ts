@@ -28,6 +28,7 @@ import { generateStory, storyFailureLine, storySvgHash, storyTrimmedLine } from 
 import { perPrCap } from "./budget.js";
 import { renderStorySvg } from "./storysvg.js";
 import type { Story } from "./story.js";
+import { buildWhereItSits, type WhereItSits } from "./whereitsits.js";
 
 /** One Not-checked line for the files whose diff was cut to fit the token budget (first names only). */
 export function trimmedNote(paths: string[]): string {
@@ -157,6 +158,8 @@ export interface ReviewResult {
   storyImageUrl?: string | null;
   storyStyle?: "svg" | "mermaid";
   storyAnimate?: boolean;
+  /** comment.where_it_sits: import neighbours shown after the story; kept so a re-render (runner secret scan) keeps them. */
+  whereItSits?: WhereItSits | null;
   schemaVersion: 1;
   /** "learning-block": head is the learning branch, LLM skipped; only comment + check are posted. */
   kind: "review" | "learning-block";
@@ -416,17 +419,25 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
       } catch { log.warning("PR story image upload failed; showing the text list."); }
     }
   }
+  let whereItSits: WhereItSits | null = null;
+  if (cfg.comment.where_it_sits && files.length) {
+    try {
+      whereItSits = await buildWhereItSits(files, o.contextSource, { skip: (p) => excludeFromLlm([{ path: p }], cfg.diff_exclude).skipped.length > 0 });
+    } catch (e) { log.warning(`Where it sits failed (${(e as Error).message}); skipped.`); }
+  }
   o.onNotes?.([...notes]);
   const body = renderComment({
     agg, mode: llm && provider ? provider.label : "rules-only", tokensEstimate: tokens, ...(storyTokens ? { storyTokens } : {}), notes,
     policyFiles: policies.used, fileFindings: findings.filter((f) => f.line === undefined),
     breakdown: breakdown ?? undefined, approval: cfg.approval, laneMap: cfg.review.lane_map, prUrl: pr.html_url,
     story, storyImageUrl, storyStyle: cfg.comment.flow_chart_style, storyAnimate: cfg.comment.flow_chart_animate,
+    ...(whereItSits ? { whereItSits } : {}),
     lineFindings: lineFindingsOf(findings),
   });
   return {
     schemaVersion: 1, kind: "review", prNumber: number, headSha: pr.head.sha, prNodeId: pr.node_id,
     story, storyImageUrl, storyStyle: cfg.comment.flow_chart_style, storyAnimate: cfg.comment.flow_chart_animate,
+    ...(whereItSits ? { whereItSits } : {}),
     ...(trimmedFiles.length ? { trimmedFiles } : {}),
     lane: agg.lane, agg, body, findings, syncInline: !!llm && !cached && !o.shepherdCommit, ...(shepherdOn ? { shepherd: true } : {}),
     usage: {

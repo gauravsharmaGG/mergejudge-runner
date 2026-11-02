@@ -4853,8 +4853,8 @@ var require_util2 = __commonJS({
       }
       return values;
     }
-    function getDecodeSplit(name, list2) {
-      const value = list2.get(name, true);
+    function getDecodeSplit(name, list3) {
+      const value = list3.get(name, true);
       if (value === null) {
         return null;
       }
@@ -12266,9 +12266,9 @@ var require_headers = __commonJS({
       // https://fetch.spec.whatwg.org/#dom-headers-getsetcookie
       getSetCookie() {
         webidl.brandCheck(this, _Headers);
-        const list2 = this.#headersList.cookies;
-        if (list2) {
-          return [...list2];
+        const list3 = this.#headersList.cookies;
+        if (list3) {
+          return [...list3];
         }
         return [];
       }
@@ -12308,8 +12308,8 @@ var require_headers = __commonJS({
       static getHeadersList(o) {
         return o.#headersList;
       }
-      static setHeadersList(o, list2) {
-        o.#headersList = list2;
+      static setHeadersList(o, list3) {
+        o.#headersList = list3;
       }
     };
     var { getHeadersGuard, setHeadersGuard, getHeadersList, setHeadersList } = Headers2;
@@ -13277,13 +13277,13 @@ var require_request2 = __commonJS({
         if (this.signal.aborted) {
           ac.abort(this.signal.reason);
         } else {
-          let list2 = dependentControllerMap.get(this.signal);
-          if (list2 === void 0) {
-            list2 = /* @__PURE__ */ new Set();
-            dependentControllerMap.set(this.signal, list2);
+          let list3 = dependentControllerMap.get(this.signal);
+          if (list3 === void 0) {
+            list3 = /* @__PURE__ */ new Set();
+            dependentControllerMap.set(this.signal, list3);
           }
           const acRef = new WeakRef(ac);
-          list2.add(acRef);
+          list3.add(acRef);
           util.addAbortListener(
             ac.signal,
             buildAbort(acRef)
@@ -26233,15 +26233,15 @@ var require_parser = __commonJS({
     var node_process = require("process");
     var cst = require_cst();
     var lexer = require_lexer();
-    function includesToken(list2, type) {
-      for (let i = 0; i < list2.length; ++i)
-        if (list2[i].type === type)
+    function includesToken(list3, type) {
+      for (let i = 0; i < list3.length; ++i)
+        if (list3[i].type === type)
           return true;
       return false;
     }
-    function findNonEmptyIndex(list2) {
-      for (let i = 0; i < list2.length; ++i) {
-        switch (list2[i].type) {
+    function findNonEmptyIndex(list3) {
+      for (let i = 0; i < list3.length; ++i) {
+        switch (list3[i].type) {
           case "space":
           case "comment":
           case "newline":
@@ -27589,11 +27589,11 @@ var Summary = class {
    */
   addTable(rows) {
     const tableBody = rows.map((row) => {
-      const cells = row.map((cell2) => {
-        if (typeof cell2 === "string") {
-          return this.wrap("td", cell2);
+      const cells = row.map((cell3) => {
+        if (typeof cell3 === "string") {
+          return this.wrap("td", cell3);
         }
-        const { header: header2, data, colspan, rowspan } = cell2;
+        const { header: header2, data, colspan, rowspan } = cell3;
         const tag = header2 ? "th" : "td";
         const attrs2 = Object.assign(Object.assign({}, colspan && { colspan }), rowspan && { rowspan });
         return this.wrap(tag, data, attrs2);
@@ -28287,12 +28287,12 @@ function endpointWithDefaults(defaults3, route, options) {
   return parse(merge(defaults3, route, options));
 }
 function withDefaults(oldDefaults, newDefaults) {
-  const DEFAULTS2 = merge(oldDefaults, newDefaults);
-  const endpoint2 = endpointWithDefaults.bind(null, DEFAULTS2);
+  const DEFAULTS22 = merge(oldDefaults, newDefaults);
+  const endpoint2 = endpointWithDefaults.bind(null, DEFAULTS22);
   return Object.assign(endpoint2, {
-    DEFAULTS: DEFAULTS2,
-    defaults: withDefaults.bind(null, DEFAULTS2),
-    merge: merge.bind(null, DEFAULTS2),
+    DEFAULTS: DEFAULTS22,
+    defaults: withDefaults.bind(null, DEFAULTS22),
+    merge: merge.bind(null, DEFAULTS22),
     parse
   });
 }
@@ -48192,8 +48192,8 @@ var contributors = {
 function aggregateChecks(schema) {
   const agg = {};
   const def = schema._zod.def;
-  const list2 = schema._zod.traits.has("$ZodCheck") ? [schema, ...def.checks ?? []] : def.checks ?? [];
-  for (const ch of list2)
+  const list3 = schema._zod.traits.has("$ZodCheck") ? [schema, ...def.checks ?? []] : def.checks ?? [];
+  for (const ch of list3)
     contributors[ch._zod.def.check]?.(agg, ch._zod.def);
   const bag = schema._zod.bag;
   if (bag.minimum !== void 0)
@@ -52870,7 +52870,7 @@ var defaults2 = (def) => {
     defaults: (options) => orig.defaults(ext(def, options)),
     makeRe: (pattern, options = {}) => orig.makeRe(pattern, ext(def, options)),
     braceExpand: (pattern, options = {}) => orig.braceExpand(pattern, ext(def, options)),
-    match: (list2, pattern, options = {}) => orig.match(list2, pattern, ext(def, options)),
+    match: (list3, pattern, options = {}) => orig.match(list3, pattern, ext(def, options)),
     sep: orig.sep,
     GLOBSTAR
   });
@@ -52886,13 +52886,13 @@ var braceExpand = (pattern, options = {}) => {
 minimatch.braceExpand = braceExpand;
 var makeRe = (pattern, options = {}) => new Minimatch(pattern, options).makeRe();
 minimatch.makeRe = makeRe;
-var match = (list2, pattern, options = {}) => {
+var match = (list3, pattern, options = {}) => {
   const mm = new Minimatch(pattern, options);
-  list2 = list2.filter((f) => mm.match(f));
-  if (mm.options.nonull && !list2.length) {
-    list2.push(pattern);
+  list3 = list3.filter((f) => mm.match(f));
+  if (mm.options.nonull && !list3.length) {
+    list3.push(pattern);
   }
-  return list2;
+  return list3;
 };
 minimatch.match = match;
 var globMagic = /[?*]|[+@!]\(.*?\)|\[|\]/;
@@ -54026,8 +54026,10 @@ var configSchema = external_exports.object({
     flow_chart_style: external_exports.enum(["svg", "mermaid"]).default("svg"),
     flow_chart_host: external_exports.enum(["none", "branch"]).default("none"),
     /** Animate the SVG subway pulse or new/changed Mermaid edges. Only matters when flow_chart is on. */
-    flow_chart_animate: external_exports.boolean().default(true)
-  }).default({ flow_chart: false, flow_chart_animate: true, flow_chart_style: "svg", flow_chart_host: "none" }),
+    flow_chart_animate: external_exports.boolean().default(true),
+    /** Opt-in: list each changed file's import neighbours (who imports it, what it imports) under the PR story. Deterministic, no AI call; explanatory only. */
+    where_it_sits: external_exports.boolean().default(false)
+  }).default({ flow_chart: false, flow_chart_animate: true, flow_chart_style: "svg", flow_chart_host: "none", where_it_sits: false }),
   /**
    * How many model passes run over the diff. `fast` (default) is the single pass.
    * `deep` adds a second pass for cross-hunk, concurrency, security, data and API defects.
@@ -54813,6 +54815,271 @@ function renderLaneMap(agg, env, opts = {}) {
   return out;
 }
 
+// core/context.ts
+var CONTEXT_DEFAULTS = { max_bytes: 4e4, max_files: 25, max_symbols: 3, max_callers: 3, max_file_bytes: 12e3 };
+var JS_EXT = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
+var isJs = (p) => /\.(m|c)?[jt]sx?$/.test(p);
+var isPy = (p) => p.endsWith(".py");
+var dirname = (p) => p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
+function normalize(path2) {
+  const out = [];
+  for (const seg of path2.split("/")) {
+    if (!seg || seg === ".") continue;
+    if (seg === "..") out.pop();
+    else out.push(seg);
+  }
+  return out.join("/");
+}
+function localImports(path2, text3) {
+  const specs = /* @__PURE__ */ new Set();
+  if (isJs(path2)) {
+    const re = /(?:import\s[^'"]*?from\s*|import\s*\(?\s*|export\s[^'"]*?from\s*|require\s*\(\s*)['"](\.{1,2}\/[^'"]+)['"]/g;
+    for (const m of text3.matchAll(re)) specs.add(m[1]);
+  } else if (isPy(path2)) {
+    for (const m of text3.matchAll(/^\s*from\s+(\.+)([\w.]*)\s+import\s+([\w, ]+)/gm)) {
+      const dots = m[1].length;
+      const mod = m[2];
+      const up = "../".repeat(Math.max(0, dots - 1)) || "./";
+      if (mod) specs.add(up + mod.replace(/\./g, "/"));
+      else for (const n of m[3].split(",").map((s) => s.trim()).filter(Boolean)) specs.add(up + n);
+    }
+  }
+  return [...specs];
+}
+function resolveImport(from, spec, paths) {
+  const base = normalize(`${dirname(from)}/${spec}`);
+  const cands = isPy(from) ? [`${base}.py`, `${base}/__init__.py`] : [base, ...JS_EXT.map((e) => base.replace(/\.js$/, "") + e), ...JS_EXT.map((e) => `${base}/index${e}`)];
+  return cands.find((c) => paths.has(c)) ?? null;
+}
+function changedSymbols(patch) {
+  if (!patch) return [];
+  const out = /* @__PURE__ */ new Set();
+  for (const line of patch.split("\n")) {
+    if (!/^[+-]/.test(line) || /^(\+\+\+|---)/.test(line)) continue;
+    const l = line.slice(1);
+    const m = l.match(/^\s*export\s+(?:default\s+)?(?:async\s+)?(?:function\*?|class|const|let|var)\s+([A-Za-z_$][\w$]*)/) ?? l.match(/^\s*(?:async\s+)?function\*?\s+([A-Za-z_$][\w$]*)\s*\(/) ?? l.match(/^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(/) ?? l.match(/^\s*class\s+([A-Za-z_]\w*)/);
+    if (m && m[1].length >= 3) out.add(m[1]);
+  }
+  return [...out];
+}
+function hunkRanges(patch) {
+  const out = [];
+  for (const m of (patch ?? "").matchAll(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm)) {
+    const start = Number(m[1]);
+    out.push([start, start + Math.max(0, Number(m[2] ?? 1) - 1)]);
+  }
+  return out;
+}
+function excerpt(text3, ranges, maxBytes, pad = 30) {
+  const lines = text3.split("\n");
+  const wins = ranges.map(([a, b]) => [Math.max(1, a - pad), Math.min(lines.length, b + pad)]).sort((x, y) => x[0] - y[0]);
+  const merged = [];
+  for (const w of wins) {
+    const last = merged[merged.length - 1];
+    if (last && w[0] <= last[1] + 1) last[1] = Math.max(last[1], w[1]);
+    else merged.push([...w]);
+  }
+  let out = "";
+  for (const [a, b] of merged) {
+    const chunk = `[... excerpt L${a}-L${b} of ${lines.length} lines ...]
+` + lines.slice(a - 1, b).map((l, i) => `L${a + i} ${l}`).join("\n") + "\n";
+    if (out.length + chunk.length > maxBytes) {
+      out += chunk.slice(0, Math.max(0, maxBytes - out.length));
+      break;
+    }
+    out += chunk;
+  }
+  return out;
+}
+var lineHits = (text3, re) => text3.split("\n").flatMap((l, i) => re.test(l) ? [[i + 1, i + 1]] : []);
+async function gatherContext(files, src, opts = {}, log = () => {
+}) {
+  const o = { ...CONTEXT_DEFAULTS, ...opts };
+  const pieces = [];
+  const dropped = [];
+  const seen = /* @__PURE__ */ new Set();
+  let bytes = 0;
+  let reads = 0;
+  const changedPaths = files.filter((f) => f.status !== "removed").map((f) => f.path);
+  const changedSet = new Set(files.map((f) => f.path));
+  const add = (path2, kind, why, text3, focus) => {
+    const left = o.max_bytes - bytes;
+    if (left < 512) {
+      dropped.push(path2);
+      return false;
+    }
+    const cap2 = Math.min(left, o.max_file_bytes);
+    let content2 = text3;
+    let truncated = false;
+    if (text3.length > cap2) {
+      truncated = true;
+      content2 = focus?.length ? excerpt(text3, focus, cap2) : text3.slice(0, cap2);
+      why += focus?.length ? ", excerpt around relevant lines" : "";
+    }
+    pieces.push({ path: path2, kind, why, content: content2, truncated });
+    bytes += content2.length;
+    return true;
+  };
+  const read = async (p) => {
+    if (o.skip?.(p)) return null;
+    if (reads >= o.max_files) {
+      dropped.push(p);
+      return null;
+    }
+    reads++;
+    try {
+      const t = await src.readFile(p);
+      return t !== null && t.includes("\0") ? null : t;
+    } catch {
+      return null;
+    }
+  };
+  const texts = /* @__PURE__ */ new Map();
+  for (const p of changedPaths) {
+    if (seen.has(p)) continue;
+    seen.add(p);
+    const t = await read(p);
+    if (t === null) continue;
+    texts.set(p, t);
+    add(p, "changed", "changed file, full text at head", t, hunkRanges(files.find((f) => f.path === p)?.patch));
+  }
+  const all = await src.listPaths().catch(() => null);
+  const pathSet = new Set(all ?? []);
+  if (all) {
+    for (const [p, t] of texts) {
+      for (const spec of localImports(p, t)) {
+        const target = resolveImport(p, spec, pathSet);
+        if (!target || seen.has(target)) continue;
+        seen.add(target);
+        const it = await read(target);
+        if (it !== null && !add(target, "import", `imported by ${p}`, it)) break;
+      }
+    }
+  }
+  const symbols = [...new Set(files.flatMap((f) => changedSymbols(f.patch)))].slice(0, o.max_symbols);
+  for (const sym of symbols) {
+    let hits = [];
+    try {
+      hits = await src.searchSymbol(sym);
+    } catch (e) {
+      log(`context: search for ${sym} failed (${e.message})`);
+    }
+    let kept = 0;
+    for (const h of hits) {
+      if (kept >= o.max_callers) break;
+      if (seen.has(h) || changedSet.has(h)) continue;
+      if (all && !pathSet.has(h)) continue;
+      seen.add(h);
+      const t = await read(h);
+      if (t === null || !new RegExp(`\\b${sym.replace(/\$/g, "\\$")}\\b`).test(t)) continue;
+      kept++;
+      if (!add(h, "caller", `uses ${sym}`, t, lineHits(t, new RegExp(`\\b${sym.replace(/\$/g, "\\$")}\\b`)))) break;
+    }
+  }
+  log(`context: ${pieces.length} piece(s), ${bytes} bytes, ${reads} read(s)${dropped.length ? `, dropped ${dropped.length}` : ""}`);
+  return { pieces, bytes, reads, dropped };
+}
+
+// core/whereitsits.ts
+var DEFAULTS2 = { max_files: 5, max_neighbours: 3, max_reads: 20, max_searches: 5, skip: () => false };
+var isCode = (p) => /\.(m|c)?[jt]sx?$/.test(p) || p.endsWith(".py");
+function removedExports(path2, patch) {
+  const names = (sign) => {
+    const out = /* @__PURE__ */ new Set();
+    for (const line of patch.split("\n")) {
+      if (line[0] !== sign || line.startsWith(sign.repeat(3))) continue;
+      const t = line.slice(1);
+      if (path2.endsWith(".py")) {
+        const m2 = /^(?:async\s+)?(?:def|class)\s+(\w+)/.exec(t);
+        if (m2) out.add(m2[1]);
+        continue;
+      }
+      const m = /^\s*export\s+(?:async\s+)?(?:function\*?|const|let|class|interface|type)\s+(\w+)/.exec(t);
+      if (m) out.add(m[1]);
+      const list3 = /^\s*export\s*\{([^}]*)\}/.exec(t);
+      for (const n of list3?.[1]?.split(",") ?? []) {
+        const name = n.trim().split(/\s+as\s+/).pop().trim();
+        if (/^\w+$/.test(name)) out.add(name);
+      }
+    }
+    return out;
+  };
+  const added = names("+");
+  return [...names("-")].filter((n) => !added.has(n));
+}
+function searchTerm(path2) {
+  const parts = path2.split("/");
+  const base = parts.pop().replace(/\.[^.]+$/, "");
+  return base === "index" || base === "__init__" ? parts.pop() ?? "" : base;
+}
+var riskOf = (text3, removed) => {
+  const hit = removed.find((n) => new RegExp(`\\b${n}\\b`).test(text3));
+  return hit ? `uses removed export \`${hit}\`` : void 0;
+};
+async function buildWhereItSits(files, src, opts = {}) {
+  const o = { ...DEFAULTS2, ...opts };
+  const cands = files.filter((f) => f.status !== "removed" && isCode(f.path) && !o.skip(f.path));
+  if (!cands.length) return null;
+  const all = await src.listPaths().catch(() => null);
+  if (!all) return null;
+  const paths = new Set(all);
+  const changed = new Set(files.map((f) => f.path));
+  let reads = 0;
+  let searches = 0;
+  const read = async (p) => {
+    if (reads >= o.max_reads) return null;
+    reads++;
+    return src.readFile(p).catch(() => null);
+  };
+  const entries = [];
+  const shown = cands.slice(0, o.max_files);
+  const perFile = Math.max(1, Math.floor((o.max_reads - shown.length) / shown.length));
+  for (const f of shown) {
+    const text3 = await read(f.path);
+    const imports = [...new Set(text3 ? localImports(f.path, text3).map((s) => resolveImport(f.path, s, paths)).filter((p) => !!p && p !== f.path) : [])];
+    const removed = f.patch ? removedExports(f.path, f.patch) : [];
+    const importedBy = [];
+    let more = 0;
+    const term = searchTerm(f.path);
+    if (term && searches < o.max_searches) {
+      searches++;
+      const hits = await src.searchSymbol(term).catch(() => []);
+      let looked = 0;
+      for (const h of [...new Set(hits)]) {
+        if (changed.has(h) || !paths.has(h) || !isCode(h)) continue;
+        if (looked++ >= perFile) break;
+        const t = await read(h);
+        if (t === null || !localImports(h, t).some((s) => resolveImport(h, s, paths) === f.path)) continue;
+        const risk = riskOf(t, removed);
+        if (importedBy.length < o.max_neighbours) importedBy.push({ path: h, ...risk ? { risk } : {} });
+        else more++;
+      }
+    }
+    entries.push({ path: f.path, importedBy, imports: imports.slice(0, o.max_neighbours), moreImportedBy: more, moreImports: Math.max(0, imports.length - o.max_neighbours) });
+  }
+  return { entries, moreFiles: Math.max(0, cands.length - o.max_files) };
+}
+var cell = (p) => `\`${p.replace(/\|/g, "\\|")}\``;
+var list = (items, more) => items.length ? [...items, ...more ? [`+${more} more`] : []].join(", ") : "\u2014";
+function renderWhereItSits(w) {
+  const rows = w.entries.map((e) => {
+    const by = list(e.importedBy.map((n) => cell(n.path) + (n.risk ? ` \u26A0\uFE0F ${n.risk}` : "")), e.moreImportedBy);
+    return `| ${cell(e.path)} | ${by} | ${list(e.imports.map(cell), e.moreImports)} |`;
+  });
+  return [
+    `<details><summary>Where it sits (${w.entries.length} file${w.entries.length === 1 ? "" : "s"})</summary>`,
+    "",
+    "| Changed file | Imported by | Imports |",
+    "|---|---|---|",
+    ...rows,
+    "",
+    ...w.moreFiles > 0 ? [`\u2026and ${w.moreFiles} more changed file${w.moreFiles === 1 ? "" : "s"} not shown.`] : [],
+    "<sub>From import lines and code search only; may miss dynamic imports. Explanatory; does not change the lane.</sub>",
+    "</details>",
+    ""
+  ];
+}
+
 // core/story.ts
 var MAX_STORY_STEPS = 6;
 var MAX_STORY_EDGES = 8;
@@ -55125,8 +55392,8 @@ function whyThisLane(r, flagged) {
   const out = [`<details><summary><b>Why this lane?</b> ${short}</summary>`, ""];
   const reasons = [...byReason].slice(0, MAX_LIST_ROWS);
   for (const [head, paths] of reasons) {
-    const list2 = paths.slice(0, MAX_FILES_PER_REASON).map(code).join(", ");
-    out.push(`- **${escapeMd(head)}:** ${list2}${paths.length > MAX_FILES_PER_REASON ? ` +${paths.length - MAX_FILES_PER_REASON} more` : ""}`);
+    const list3 = paths.slice(0, MAX_FILES_PER_REASON).map(code).join(", ");
+    out.push(`- **${escapeMd(head)}:** ${list3}${paths.length > MAX_FILES_PER_REASON ? ` +${paths.length - MAX_FILES_PER_REASON} more` : ""}`);
   }
   out.push(...moreNote(MAX_LIST_ROWS, byReason.size));
   const aiNotes = flagged.flatMap((f) => {
@@ -55199,8 +55466,9 @@ function renderComment(r) {
   const checks = whatToCheck(r, rubricOpen);
   const rest = [...whyThisLane(r, flagged), ...filesSection(r, flagged, safe), ...allChecks(rubric)];
   const chart = r.story ? renderStorySection(r.story, r.storyAnimate !== false, r.storyStyle, r.storyImageUrl) : [];
-  const list2 = r.story ? renderStorySection(r.story, false, r.storyStyle, null, false) : [];
-  const headOf = (section) => [...out, ...checks, ...section, ...rest].join("\n");
+  const list3 = r.story ? renderStorySection(r.story, false, r.storyStyle, null, false) : [];
+  const sits = r.whereItSits ? renderWhereItSits(r.whereItSits) : [];
+  const headOf = (section, extra = []) => [...out, ...checks, ...section, ...extra, ...rest].join("\n");
   const unchecked = notChecked(r);
   const tail = [...unchecked ? [unchecked] : [], "---", "", renderFeedback(rubric), ""];
   tail.push(
@@ -55213,8 +55481,9 @@ function renderComment(r) {
     "</details>"
   );
   const tailText = "\n" + tail.join("\n");
-  let head = headOf(chart);
-  if (head.length + tailText.length > MAX_COMMENT_CHARS) head = headOf(list2);
+  let head = headOf(chart, sits);
+  if (head.length + tailText.length > MAX_COMMENT_CHARS) head = headOf(list3, sits);
+  if (head.length + tailText.length > MAX_COMMENT_CHARS) head = headOf(list3);
   if (head.length + tailText.length > MAX_COMMENT_CHARS) head = headOf([]);
   return capBody(head, tailText);
 }
@@ -55709,11 +55978,11 @@ async function publishProposalPr(ok, r, opts) {
 var PROPOSAL_MARKER = "<!-- mergejudge:learning-proposal -->";
 async function findOpenProposalPr(ok, r, headBranch) {
   const sameRepo = (p) => p.head.repo?.full_name?.toLowerCase() === `${r.owner}/${r.repo}`.toLowerCase();
-  const list2 = (branch) => ok.paginate(ok.rest.pulls.list, { ...r, state: "open", head: `${r.owner}:${branch}`, per_page: 10 });
-  const current = (await list2(headBranch)).find((p) => p.head.ref === headBranch && sameRepo(p));
+  const list3 = (branch) => ok.paginate(ok.rest.pulls.list, { ...r, state: "open", head: `${r.owner}:${branch}`, per_page: 10 });
+  const current = (await list3(headBranch)).find((p) => p.head.ref === headBranch && sameRepo(p));
   if (current) return { number: current.number, url: current.html_url, headRef: headBranch };
   if (headBranch === LEGACY_PROPOSAL_BRANCH) return null;
-  const legacy = (await list2(LEGACY_PROPOSAL_BRANCH)).find(
+  const legacy = (await list3(LEGACY_PROPOSAL_BRANCH)).find(
     (p) => p.head.ref === LEGACY_PROPOSAL_BRANCH && sameRepo(p) && p.body?.includes(PROPOSAL_MARKER)
   );
   return legacy ? { number: legacy.number, url: legacy.html_url, headRef: LEGACY_PROPOSAL_BRANCH } : null;
@@ -56136,7 +56405,7 @@ function guardConfigEdit(before, after, expect) {
     if (SENSITIVE_ID.test(id) || crit?.raise_to === "block") throw new ProposalGuardError(`a note may not soften ${id} (security or block criterion)`);
   }
 }
-var list = (n) => n.slice(0, 10).map((x) => `#${x}`).join(", ") + (n.length > 10 ? `, +${n.length - 10} more` : "");
+var list2 = (n) => n.slice(0, 10).map((x) => `#${x}`).join(", ") + (n.length > 10 ? `, +${n.length - 10} more` : "");
 var BODY_MAX = 6e4;
 async function planProposal(o) {
   const { cfg, log } = o;
@@ -56159,7 +56428,7 @@ async function planProposal(o) {
   const protectedAdded = [];
   const customAdded = [];
   for (const s of sug.strict) {
-    const why = `${s.prs.length} PRs (${list(s.prs)}), people: ${s.actors.map((x) => `\`${x}\``).join(", ")}; ${s.downs} "wrong" vote(s), ${s.mergedOver} merge(s) over a failed check, ${s.dismissed} dismissed finding(s), ${s.ups} "right" vote(s)`;
+    const why = `${s.prs.length} PRs (${list2(s.prs)}), people: ${s.actors.map((x) => `\`${x}\``).join(", ")}; ${s.downs} "wrong" vote(s), ${s.mergedOver} merge(s) over a failed check, ${s.dismissed} dismissed finding(s), ${s.ups} "right" vote(s)`;
     if (SENSITIVE_ID.test(s.id) || cfg.rubrics.custom.find((c) => c.id === s.id)?.raise_to === "block") {
       notApplied.push(`\`${s.id}\` looks too strict (${why}). It is a security or block check, so learning never softens it. Please look at it by hand.`);
       continue;
@@ -56197,7 +56466,7 @@ async function planProposal(o) {
       for (const c of com.add) {
         customAdded.push(c.id);
         const links = c.urls.map((u, i) => `[${i + 1}](${u})`).join(" ");
-        lines.push(`- **Missed by MergeJudge:** add the check \`${c.id}\` under \`rubrics.custom\`: ${c.question} It can only raise a PR to \`review\`, never to \`block\`. Evidence: from ${c.reviewers} reviewer${c.reviewers === 1 ? "" : "s"} across ${c.prs.length} PRs (${list(c.prs)})${links ? `. Comments: ${links}` : ""}.`);
+        lines.push(`- **Missed by MergeJudge:** add the check \`${c.id}\` under \`rubrics.custom\`: ${c.question} It can only raise a PR to \`review\`, never to \`block\`. Evidence: from ${c.reviewers} reviewer${c.reviewers === 1 ? "" : "s"} across ${c.prs.length} PRs (${list2(c.prs)})${links ? `. Comments: ${links}` : ""}.`);
       }
     }
   }
@@ -56523,171 +56792,6 @@ function buildLearnedContext(i, delim) {
   return renderLearnedSection(buildLearnedLines(i, delim), delim);
 }
 
-// core/context.ts
-var CONTEXT_DEFAULTS = { max_bytes: 4e4, max_files: 25, max_symbols: 3, max_callers: 3, max_file_bytes: 12e3 };
-var JS_EXT = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
-var isJs = (p) => /\.(m|c)?[jt]sx?$/.test(p);
-var isPy = (p) => p.endsWith(".py");
-var dirname = (p) => p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
-function normalize(path2) {
-  const out = [];
-  for (const seg of path2.split("/")) {
-    if (!seg || seg === ".") continue;
-    if (seg === "..") out.pop();
-    else out.push(seg);
-  }
-  return out.join("/");
-}
-function localImports(path2, text3) {
-  const specs = /* @__PURE__ */ new Set();
-  if (isJs(path2)) {
-    const re = /(?:import\s[^'"]*?from\s*|import\s*\(?\s*|export\s[^'"]*?from\s*|require\s*\(\s*)['"](\.{1,2}\/[^'"]+)['"]/g;
-    for (const m of text3.matchAll(re)) specs.add(m[1]);
-  } else if (isPy(path2)) {
-    for (const m of text3.matchAll(/^\s*from\s+(\.+)([\w.]*)\s+import\s+([\w, ]+)/gm)) {
-      const dots = m[1].length;
-      const mod = m[2];
-      const up = "../".repeat(Math.max(0, dots - 1)) || "./";
-      if (mod) specs.add(up + mod.replace(/\./g, "/"));
-      else for (const n of m[3].split(",").map((s) => s.trim()).filter(Boolean)) specs.add(up + n);
-    }
-  }
-  return [...specs];
-}
-function resolveImport(from, spec, paths) {
-  const base = normalize(`${dirname(from)}/${spec}`);
-  const cands = isPy(from) ? [`${base}.py`, `${base}/__init__.py`] : [base, ...JS_EXT.map((e) => base.replace(/\.js$/, "") + e), ...JS_EXT.map((e) => `${base}/index${e}`)];
-  return cands.find((c) => paths.has(c)) ?? null;
-}
-function changedSymbols(patch) {
-  if (!patch) return [];
-  const out = /* @__PURE__ */ new Set();
-  for (const line of patch.split("\n")) {
-    if (!/^[+-]/.test(line) || /^(\+\+\+|---)/.test(line)) continue;
-    const l = line.slice(1);
-    const m = l.match(/^\s*export\s+(?:default\s+)?(?:async\s+)?(?:function\*?|class|const|let|var)\s+([A-Za-z_$][\w$]*)/) ?? l.match(/^\s*(?:async\s+)?function\*?\s+([A-Za-z_$][\w$]*)\s*\(/) ?? l.match(/^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(/) ?? l.match(/^\s*class\s+([A-Za-z_]\w*)/);
-    if (m && m[1].length >= 3) out.add(m[1]);
-  }
-  return [...out];
-}
-function hunkRanges(patch) {
-  const out = [];
-  for (const m of (patch ?? "").matchAll(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm)) {
-    const start = Number(m[1]);
-    out.push([start, start + Math.max(0, Number(m[2] ?? 1) - 1)]);
-  }
-  return out;
-}
-function excerpt(text3, ranges, maxBytes, pad = 30) {
-  const lines = text3.split("\n");
-  const wins = ranges.map(([a, b]) => [Math.max(1, a - pad), Math.min(lines.length, b + pad)]).sort((x, y) => x[0] - y[0]);
-  const merged = [];
-  for (const w of wins) {
-    const last = merged[merged.length - 1];
-    if (last && w[0] <= last[1] + 1) last[1] = Math.max(last[1], w[1]);
-    else merged.push([...w]);
-  }
-  let out = "";
-  for (const [a, b] of merged) {
-    const chunk = `[... excerpt L${a}-L${b} of ${lines.length} lines ...]
-` + lines.slice(a - 1, b).map((l, i) => `L${a + i} ${l}`).join("\n") + "\n";
-    if (out.length + chunk.length > maxBytes) {
-      out += chunk.slice(0, Math.max(0, maxBytes - out.length));
-      break;
-    }
-    out += chunk;
-  }
-  return out;
-}
-var lineHits = (text3, re) => text3.split("\n").flatMap((l, i) => re.test(l) ? [[i + 1, i + 1]] : []);
-async function gatherContext(files, src, opts = {}, log = () => {
-}) {
-  const o = { ...CONTEXT_DEFAULTS, ...opts };
-  const pieces = [];
-  const dropped = [];
-  const seen = /* @__PURE__ */ new Set();
-  let bytes = 0;
-  let reads = 0;
-  const changedPaths = files.filter((f) => f.status !== "removed").map((f) => f.path);
-  const changedSet = new Set(files.map((f) => f.path));
-  const add = (path2, kind, why, text3, focus) => {
-    const left = o.max_bytes - bytes;
-    if (left < 512) {
-      dropped.push(path2);
-      return false;
-    }
-    const cap2 = Math.min(left, o.max_file_bytes);
-    let content2 = text3;
-    let truncated = false;
-    if (text3.length > cap2) {
-      truncated = true;
-      content2 = focus?.length ? excerpt(text3, focus, cap2) : text3.slice(0, cap2);
-      why += focus?.length ? ", excerpt around relevant lines" : "";
-    }
-    pieces.push({ path: path2, kind, why, content: content2, truncated });
-    bytes += content2.length;
-    return true;
-  };
-  const read = async (p) => {
-    if (o.skip?.(p)) return null;
-    if (reads >= o.max_files) {
-      dropped.push(p);
-      return null;
-    }
-    reads++;
-    try {
-      const t = await src.readFile(p);
-      return t !== null && t.includes("\0") ? null : t;
-    } catch {
-      return null;
-    }
-  };
-  const texts = /* @__PURE__ */ new Map();
-  for (const p of changedPaths) {
-    if (seen.has(p)) continue;
-    seen.add(p);
-    const t = await read(p);
-    if (t === null) continue;
-    texts.set(p, t);
-    add(p, "changed", "changed file, full text at head", t, hunkRanges(files.find((f) => f.path === p)?.patch));
-  }
-  const all = await src.listPaths().catch(() => null);
-  const pathSet = new Set(all ?? []);
-  if (all) {
-    for (const [p, t] of texts) {
-      for (const spec of localImports(p, t)) {
-        const target = resolveImport(p, spec, pathSet);
-        if (!target || seen.has(target)) continue;
-        seen.add(target);
-        const it = await read(target);
-        if (it !== null && !add(target, "import", `imported by ${p}`, it)) break;
-      }
-    }
-  }
-  const symbols = [...new Set(files.flatMap((f) => changedSymbols(f.patch)))].slice(0, o.max_symbols);
-  for (const sym of symbols) {
-    let hits = [];
-    try {
-      hits = await src.searchSymbol(sym);
-    } catch (e) {
-      log(`context: search for ${sym} failed (${e.message})`);
-    }
-    let kept = 0;
-    for (const h of hits) {
-      if (kept >= o.max_callers) break;
-      if (seen.has(h) || changedSet.has(h)) continue;
-      if (all && !pathSet.has(h)) continue;
-      seen.add(h);
-      const t = await read(h);
-      if (t === null || !new RegExp(`\\b${sym.replace(/\$/g, "\\$")}\\b`).test(t)) continue;
-      kept++;
-      if (!add(h, "caller", `uses ${sym}`, t, lineHits(t, new RegExp(`\\b${sym.replace(/\$/g, "\\$")}\\b`)))) break;
-    }
-  }
-  log(`context: ${pieces.length} piece(s), ${bytes} bytes, ${reads} read(s)${dropped.length ? `, dropped ${dropped.length}` : ""}`);
-  return { pieces, bytes, reads, dropped };
-}
-
 // core/deepretrieve.ts
 var DEEP_RETRIEVE_DEFAULTS = { max_bytes: 8e4, max_files: 60, max_symbols: 8, max_callers: 5, max_file_bytes: 12e3 };
 var DEEP_HOP_DEFAULTS = {
@@ -56882,12 +56986,12 @@ async function retrieveDeepContext(snap, files, opts = {}, log = () => {
         if (e.side !== l.side) e.side = "both";
       } else lits.set(l.text, { ...l, from: [f.path] });
     }
-    const list2 = [...lits.values()].slice(0, max_literals);
-    if (list2.length) {
+    const list3 = [...lits.values()].slice(0, max_literals);
+    if (list3.length) {
       const changed = new Set(files.map((f) => f.path));
-      const res = list2.map((l) => wholeToken(l.text));
-      const hits = list2.map(() => /* @__PURE__ */ new Map());
-      const common = list2.map(() => false);
+      const res = list3.map((l) => wholeToken(l.text));
+      const hits = list3.map(() => /* @__PURE__ */ new Map());
+      const common = list3.map(() => false);
       let scanned = 0;
       scan: for (const [path2, fe] of Object.entries(snap.files)) {
         if (changed.has(path2) || o.skip?.(path2) || isSensitivePath(path2)) continue;
@@ -56898,8 +57002,8 @@ async function retrieveDeepContext(snap, files, opts = {}, log = () => {
         for (const c of fe.chunks) {
           scanned += c.text.length;
           if (scanned > max_scan_bytes) break scan;
-          for (let i = 0; i < list2.length; i++) {
-            if (common[i] || !c.text.includes(list2[i].text) || !res[i].test(c.text)) continue;
+          for (let i = 0; i < list3.length; i++) {
+            if (common[i] || !c.text.includes(list3[i].text) || !res[i].test(c.text)) continue;
             const m = hits[i];
             if (!m.has(path2) && m.size >= literal_common_files) {
               common[i] = true;
@@ -56908,7 +57012,7 @@ async function retrieveDeepContext(snap, files, opts = {}, log = () => {
             }
             const lines = m.get(path2) ?? [];
             c.text.split("\n").forEach((l, j) => {
-              if (l.includes(list2[i].text) && res[i].test(l)) lines.push(c.start + j);
+              if (l.includes(list3[i].text) && res[i].test(l)) lines.push(c.start + j);
             });
             m.set(path2, lines);
           }
@@ -56916,7 +57020,7 @@ async function retrieveDeepContext(snap, files, opts = {}, log = () => {
       }
       stats.scanned = scanned;
       const byFile = /* @__PURE__ */ new Map();
-      list2.forEach((l, i) => {
+      list3.forEach((l, i) => {
         for (const [path2, lines] of hits[i]) {
           const e = byFile.get(path2) ?? { score: 0, lits: [], lines: [] };
           e.score += (l.side === "removed" ? 3 : l.side === "both" ? 1 : 2) + distinct(l.text) / 10;
@@ -56931,8 +57035,8 @@ async function retrieveDeepContext(snap, files, opts = {}, log = () => {
         if (stats.literal >= max_literal_files || full()) break;
         const text3 = snapshotText(snap, path2);
         if (text3 === null) continue;
-        const names = e.lits.slice(0, 3).map((i) => `${JSON.stringify(list2[i].text)} (${list2[i].side === "removed" ? "removed" : list2[i].side === "added" ? "added" : "changed"} in ${list2[i].from[0]})`);
-        const re = symRe(e.lits.map((i) => list2[i].text));
+        const names = e.lits.slice(0, 3).map((i) => `${JSON.stringify(list3[i].text)} (${list3[i].side === "removed" ? "removed" : list3[i].side === "added" ? "added" : "changed"} in ${list3[i].from[0]})`);
+        const re = symRe(e.lits.map((i) => list3[i].text));
         addPiece(path2, text3, "caller", `references literal ${names.join(", ")} changed in this PR; may depend on the old or new value`, re, literal_piece_bytes);
         stats.literal++;
       }
@@ -59395,7 +59499,7 @@ var STATUS_TEXT = {
   protected: "\u{1F512} Stopped: a fix needs a protected path",
   off: "\u{1F4A4} Off"
 };
-var cell = (s) => escapeMd(s).replace(/@(?=[A-Za-z0-9])/g, "@\u200B");
+var cell2 = (s) => escapeMd(s).replace(/@(?=[A-Za-z0-9])/g, "@\u200B");
 function renderShepherdComment(state, repoUrl2) {
   const out = [
     "### \u{1F411} MergeJudge Shepherd \u2014 Watch and auto-fix",
@@ -59413,7 +59517,7 @@ function renderShepherdComment(state, repoUrl2) {
         e.commit ? `[commit ${e.commit.slice(0, 7)}](${repoUrl2}/commit/${e.commit})` : "",
         e.run ? `[run](${e.run})` : ""
       ].filter(Boolean).join(" \xB7 ");
-      out.push(`| ${cell(e.at)} | ${e.kind} | ${cell(e.what)} | ${cell(e.changed)} | ${cell(e.result)} | ${links} |`);
+      out.push(`| ${cell2(e.at)} | ${e.kind} | ${cell2(e.what)} | ${cell2(e.changed)} | ${cell2(e.result)} | ${links} |`);
     }
     out.push("");
   } else out.push("_No steps yet._", "");
@@ -59468,9 +59572,9 @@ Superseded by ${link}.` }).catch(() => void 0);
 }
 async function upsertShepherdComment(ok, r, pull, next, selfLogin) {
   const url2 = `https://github.com/${r.owner}/${r.repo}`;
-  const list2 = () => ok.paginate(ok.rest.issues.listComments, { ...r, issue_number: pull, per_page: 100 });
+  const list3 = () => ok.paginate(ok.rest.issues.listComments, { ...r, issue_number: pull, per_page: 100 });
   const parsed = (cs) => cs.map((c) => parseShepherdState(c.body)).filter((x) => !!x);
-  const own2 = ownStateComments(await list2(), selfLogin);
+  const own2 = ownStateComments(await list3(), selfLogin);
   const existing = own2[0];
   const prev = parseShepherdState(existing?.body);
   const folded = prev ? mergeStates(prev, parsed(own2.slice(1))) : prev;
@@ -59483,7 +59587,7 @@ async function upsertShepherdComment(ok, r, pull, next, selfLogin) {
   const created = await ok.rest.issues.createComment({ ...r, issue_number: pull, body: renderShepherdComment(state, url2) });
   const myId = created?.data?.id;
   if (myId == null) return state;
-  const after = ownStateComments(await list2(), selfLogin);
+  const after = ownStateComments(await list3(), selfLogin);
   const winner = after[0];
   if (!winner || winner.id === myId && after.length < 2) return state;
   const others = after.slice(1);
@@ -60245,6 +60349,14 @@ async function produceReviewResult(o) {
       }
     }
   }
+  let whereItSits = null;
+  if (cfg.comment.where_it_sits && files.length) {
+    try {
+      whereItSits = await buildWhereItSits(files, o.contextSource, { skip: (p) => excludeFromLlm([{ path: p }], cfg.diff_exclude).skipped.length > 0 });
+    } catch (e) {
+      log.warning(`Where it sits failed (${e.message}); skipped.`);
+    }
+  }
   o.onNotes?.([...notes]);
   const body = renderComment({
     agg,
@@ -60262,6 +60374,7 @@ async function produceReviewResult(o) {
     storyImageUrl,
     storyStyle: cfg.comment.flow_chart_style,
     storyAnimate: cfg.comment.flow_chart_animate,
+    ...whereItSits ? { whereItSits } : {},
     lineFindings: lineFindingsOf(findings)
   });
   return {
@@ -60274,6 +60387,7 @@ async function produceReviewResult(o) {
     storyImageUrl,
     storyStyle: cfg.comment.flow_chart_style,
     storyAnimate: cfg.comment.flow_chart_animate,
+    ...whereItSits ? { whereItSits } : {},
     ...trimmedFiles.length ? { trimmedFiles } : {},
     lane: agg.lane,
     agg,

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { explainLane, type Aggregate } from "./aggregate.js";
 import { renderFeedback } from "./feedback.js";
 import { renderLaneMap } from "./lanemap.js";
+import { renderWhereItSits, type WhereItSits } from "./whereitsits.js";
 import { renderStorySection, type Story } from "./story.js";
 import type { RubricResult } from "./rubrics.js";
 import { LANE_ORDER, type FileVerdict, type Lane } from "./types.js";
@@ -71,6 +72,8 @@ export interface RenderInput {
   storyAnimate?: boolean;
   storyStyle?: "svg" | "mermaid";
   storyImageUrl?: string | null;
+  /** comment.where_it_sits: import neighbours of the changed files, shown after the story. Dropped with the story when the comment is over the size cap. */
+  whereItSits?: WhereItSits | null;
 }
 
 /** The findings that carry a verified diff line (the ones that become inline comments). */
@@ -375,7 +378,8 @@ export function renderComment(r: RenderInput): string {
   const rest = [...whyThisLane(r, flagged), ...filesSection(r, flagged, safe), ...allChecks(rubric)];
   const chart = r.story ? renderStorySection(r.story, r.storyAnimate !== false, r.storyStyle, r.storyImageUrl) : [];
   const list = r.story ? renderStorySection(r.story, false, r.storyStyle, null, false) : [];
-  const headOf = (section: string[]) => [...out, ...checks, ...section, ...rest].join("\n");
+  const sits = r.whereItSits ? renderWhereItSits(r.whereItSits) : [];
+  const headOf = (section: string[], extra: string[] = []) => [...out, ...checks, ...section, ...extra, ...rest].join("\n");
   // The tail is never cut by the size cap: what was not checked, the feedback block and the footer.
   const unchecked = notChecked(r);
   const tail: string[] = [...(unchecked ? [unchecked] : []), "---", "", renderFeedback(rubric), ""];
@@ -394,8 +398,9 @@ export function renderComment(r: RenderInput): string {
     "</details>",
   );
   const tailText = "\n" + tail.join("\n");
-  // The chart is the first thing to go when the comment is over the cap.
-  let head = headOf(chart);
+  // The chart is the first thing to go when the comment is over the cap, then the where-it-sits table, then the story list.
+  let head = headOf(chart, sits);
+  if (head.length + tailText.length > MAX_COMMENT_CHARS) head = headOf(list, sits);
   if (head.length + tailText.length > MAX_COMMENT_CHARS) head = headOf(list);
   if (head.length + tailText.length > MAX_COMMENT_CHARS) head = headOf([]);
   return capBody(head, tailText);
