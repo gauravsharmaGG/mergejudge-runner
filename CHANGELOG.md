@@ -6,6 +6,7 @@ Release notes for `mergejudge-runner`. Versions below match `package.json`, `src
 
 ## Unreleased
 
+- **"Not checked" no longer claims policy files are missing when one was loaded.** The default policy files are alternatives (`REVIEW_POLICY.md`, `REVIEW.md`, `APPROVAL_POLICY.md`, `AGENTS.md`, `CLAUDE.md`). If any of them was read, the comment no longer lists the others as "missing or empty". The line appears only when none was found, and then it lists every configured file, `REVIEW.md` included.
 - **Optional "Where it sits" strip.** `comment.where_it_sits: true` adds a collapsed table under the PR story listing, for up to five changed code files, which files import them and which files they import, and flags importers that use an export the PR removed. It uses import lines and code search only (no AI call), is off by default, and never changes lanes or findings.
 - **`REVIEW.md` is a default policy file.** `policy_files` now defaults to `REVIEW_POLICY.md`, `REVIEW.md`, `APPROVAL_POLICY.md`, `AGENTS.md`, `CLAUDE.md` (read from the base branch, same caps). A missing `REVIEW.md` only adds its name to the existing "Policy files missing or empty" line. An explicit `policy_files` list still replaces the defaults. Example template: `examples/REVIEW.md` (evidence rule and a nit cap).
 - **Default `budget.max_tokens_per_pr` raised from 28000 to 40000.** Set it explicitly in `.mergejudge.yml` to keep the old cap.
