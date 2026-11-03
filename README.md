@@ -226,7 +226,7 @@ No config file is required. Built-in defaults apply, and the file is read from t
 | `lanes.protected` | Globs that are at least `review`. Defaults include `.github/**`, `deploy/**`, `**/auth/**`, `**/migrations/**`. |
 | `lanes.auto` | Docs and style globs that can be `auto` under the line limit. Low risk, not a guarantee. |
 | `lanes.code_auto` | Opt-in. Off by default. Small test-only changes can be `auto`. Read from the base branch. |
-| `policy_files` | Base-branch guidance. Defaults: `REVIEW_POLICY.md`, `APPROVAL_POLICY.md`, `AGENTS.md`, `CLAUDE.md`. |
+| `policy_files` | Base-branch guidance. Defaults: `REVIEW_POLICY.md`, `REVIEW.md`, `APPROVAL_POLICY.md`, `AGENTS.md`, `CLAUDE.md`. Example `REVIEW.md`: [`examples/REVIEW.md`](examples/REVIEW.md). |
 | `runner.code_source` | Hosted runner only. `worker` (default) or `local` (the runner reads its own clone). |
 | `learning.propose_after` | How many explicit feedback lessons before a proposal PR (default 10). |
 

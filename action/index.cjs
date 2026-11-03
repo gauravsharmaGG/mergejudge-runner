@@ -53575,7 +53575,7 @@ minimatch.escape = escape;
 minimatch.unescape = unescape;
 
 // core/policy.ts
-var DEFAULT_POLICY_FILES = ["REVIEW_POLICY.md", "APPROVAL_POLICY.md", "AGENTS.md", "CLAUDE.md"];
+var DEFAULT_POLICY_FILES = ["REVIEW_POLICY.md", "REVIEW.md", "APPROVAL_POLICY.md", "AGENTS.md", "CLAUDE.md"];
 var POLICY_MAX_EACH = 8 * 1024;
 var POLICY_MAX_TOTAL = 8 * 1024;
 function fairShares(sizes, total) {
