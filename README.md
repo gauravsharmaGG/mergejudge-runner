@@ -222,6 +222,7 @@ No config file is required. Built-in defaults apply, and the file is read from t
 | `comment.flow_chart_style` | `svg` (default) or `mermaid`. SVG uses the subway layout, with light/dark themes. Mermaid is explicit opt-in. Both include a plain text step list. |
 | `comment.flow_chart_animate` | Optional boolean, default `true`. Enables CSS animation in SVG or animated Mermaid edges. `false` emits a static chart. SVG respects reduced-motion preferences. |
 | `comment.flow_chart_host` | `none` (default) or `branch`. `none` shows the text list for SVG. The Action's `branch` option uploads SVGs only for public repositories to the orphan `mergejudge-assets` branch; requires `contents: write`. |
+| `comment.where_it_sits` | Optional boolean, default `false`. Adds a collapsed "Where it sits" table after the PR story: for up to 5 changed code files, who imports each one and what it imports, with a warning when an importer uses an export the PR removed. Built from import lines and code search only, with no AI call; it never affects lanes or findings. |
 | `lanes.protected` | Globs that are at least `review`. Defaults include `.github/**`, `deploy/**`, `**/auth/**`, `**/migrations/**`. |
 | `lanes.auto` | Docs and style globs that can be `auto` under the line limit. Low risk, not a guarantee. |
 | `lanes.code_auto` | Opt-in. Off by default. Small test-only changes can be `auto`. Read from the base branch. |

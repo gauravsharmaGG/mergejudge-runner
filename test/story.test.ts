@@ -248,7 +248,7 @@ const review = (yml: string, provider: LlmProvider) => produceReviewResult({
 
 describe("config and separate call", () => {
   it("defaults to SVG, text-only hosting, off, animation on", () => {
-    expect(parseConfig("").comment).toEqual({ flow_chart: false, flow_chart_animate: true, flow_chart_style: "svg", flow_chart_host: "none" });
+    expect(parseConfig("").comment).toEqual({ flow_chart: false, flow_chart_animate: true, flow_chart_style: "svg", flow_chart_host: "none", where_it_sits: false });
     expect(parseConfig("comment:\n  flow_chart_style: mermaid\n  flow_chart_host: branch").comment).toMatchObject({ flow_chart_style: "mermaid", flow_chart_host: "branch" });
     expect(sanitizeStoryText("Click handler", 48)).toBe("Click handler");
   });
