@@ -60321,7 +60321,7 @@ async function produceReviewResult(o) {
   const excluded = excludeFromLlm(files, cfg.diff_exclude).skipped;
   for (const path2 of excluded) notes.push(`Diff excluded from AI review: ${path2}`);
   for (const f of files) if (!f.patch) notes.push(`Diff unavailable: ${f.path}`);
-  for (const path2 of policies.skipped) notes.push(`Policy file missing or empty: ${path2}`);
+  if (!policies.used.length) for (const path2 of policies.skipped) notes.push(`Policy file missing or empty: ${path2}`);
   const agg = aggregate(files, labels, cfg, llm, { body: pr.body ?? null, user: pr.user ?? null, configPaths: o.configPaths });
   let findings = llm?.findings ?? [];
   if (llm && cfg.learning.enabled && o.learned?.length) {
