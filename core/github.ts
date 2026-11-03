@@ -2,7 +2,8 @@ import type * as github from "@actions/github";
 import type { PrFile } from "./types.js";
 import { CHECK_CONCLUSION, CHECK_NAME, MARKER, checkSummary } from "./render.js";
 import type { Aggregate } from "./aggregate.js";
-import { planInline, type InlinePlan } from "./inline.js";
+import { parseMarker, planInline, type InlinePlan } from "./inline.js";
+import type { FindingThread } from "./answers.js";
 import type { Finding } from "./triage.js";
 import { LEARNING_BRANCH, LESSONS_PATH } from "./learning.js";
 import { createGuardedWriter, LEGACY_PROPOSAL_BRANCH, PROPOSAL_BRANCH_PREFIX, type GitWriter } from "./writes.js";
@@ -43,9 +44,18 @@ export async function fetchPrFiles(ok: Octokit, r: Repo, pull: number, maxFiles?
   return listed;
 }
 
-export async function upsertStickyComment(ok: Octokit, r: Repo, pull: number, body: string): Promise<void> {
+async function findStickyComment(ok: Octokit, r: Repo, pull: number) {
   const comments = await ok.paginate(ok.rest.issues.listComments, { ...r, issue_number: pull, per_page: 100 });
-  const existing = comments.find((c) => c.body?.includes(MARKER) && c.user?.type === "Bot");
+  return comments.find((c) => c.body?.includes(MARKER) && c.user?.type === "Bot");
+}
+
+/** Body of our sticky comment, or undefined when there is none yet. */
+export async function readStickyBody(ok: Octokit, r: Repo, pull: number): Promise<string | undefined> {
+  return (await findStickyComment(ok, r, pull))?.body ?? undefined;
+}
+
+export async function upsertStickyComment(ok: Octokit, r: Repo, pull: number, body: string): Promise<void> {
+  const existing = await findStickyComment(ok, r, pull);
   if (existing) await ok.rest.issues.updateComment({ ...r, comment_id: existing.id, body });
   else await ok.rest.issues.createComment({ ...r, issue_number: pull, body });
 }
@@ -120,12 +130,14 @@ export async function fetchBaseConfig(
 export async function syncInlineFindings(
   ok: Octokit, r: Repo, pull: number, headSha: string, findings: Finding[],
   warn: (m: string) => void = () => {}, log: (m: string) => void = () => {}, reviewer?: string,
+  keepPaths: ReadonlySet<string> = new Set(),
 ): Promise<InlinePlan> {
   const existing = await ok.paginate(ok.rest.pulls.listReviewComments, { ...r, pull_number: pull, per_page: 100 });
   const plan = planInline(
     findings,
     existing.map((c) => ({ id: c.id, body: c.body, isBot: c.user?.type === "Bot" })),
     { sha: headSha, reviewer },
+    keepPaths,
   );
   const ours = new Set(existing.filter((c) => c.user?.type === "Bot").map((c) => c.id));
   let threads: Map<number, string> | null = null;
@@ -169,6 +181,33 @@ export async function reviewThreadsByRootComment(ok: Octokit, r: Repo, pull: num
     for (const t of rt.nodes) {
       const id = t.comments.nodes[0]?.databaseId;
       if (typeof id === "number") out.set(id, t.id);
+    }
+    if (!rt.pageInfo.hasNextPage) break;
+    after = rt.pageInfo.endCursor;
+  }
+  return out;
+}
+
+/** MergeJudge's inline finding threads on a PR (root comment is ours and carries a marker), with the replies under each. */
+export async function listFindingThreads(ok: Octokit, r: Repo, pull: number): Promise<FindingThread[]> {
+  const out: FindingThread[] = [];
+  let after: string | null = null;
+  for (let page = 0; page < 10; page++) {
+    const res: any = await ok.graphql(
+      `query($o: String!, $n: String!, $p: Int!, $a: String) { repository(owner: $o, name: $n) { pullRequest(number: $p) {
+        reviewThreads(first: 100, after: $a) { pageInfo { hasNextPage endCursor }
+          nodes { isResolved path comments(first: 30) { nodes { databaseId body author { login __typename } } } } } } } }`,
+      { o: r.owner, n: r.repo, p: pull, a: after },
+    );
+    const rt = res.repository.pullRequest.reviewThreads;
+    for (const t of rt.nodes) {
+      const [root, ...rest] = t.comments.nodes as { databaseId: number; body: string; author: { login: string; __typename: string } | null }[];
+      const m = root && root.author?.__typename === "Bot" ? parseMarker(root.body) : null;
+      if (!root || !m) continue;
+      out.push({
+        rootId: root.databaseId, key: m.key, path: t.path, state: m.state === "resolved" ? "resolved" : "active", isResolved: !!t.isResolved,
+        replies: rest.map((c) => ({ author: c.author?.login ?? null, isBot: c.author?.__typename === "Bot", body: c.body ?? "" })),
+      });
     }
     if (!rt.pageInfo.hasNextPage) break;
     after = rt.pageInfo.endCursor;

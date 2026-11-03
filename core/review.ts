@@ -1,11 +1,12 @@
 import { aggregate, explainLane, type Aggregate } from "./aggregate.js";
 import { applyApproval } from "./approval.js";
 import type { Config } from "./config.js";
-import type { Lane, PrFile } from "./types.js";
+import { maxLane, type Lane, type PrFile } from "./types.js";
 import {
   approvePr, createCheckRun, dismissOwnApprovals, enableAutoMerge, fetchPrFiles, fetchRepoFile, UNLISTED_FILES_PATH,
-  syncInlineFindings, upsertStickyComment, githubContextSource, type Octokit, type Repo,
+  syncInlineFindings, upsertStickyComment, readStickyBody, listFindingThreads, compareChangedFiles, githubContextSource, type Octokit, type Repo,
 } from "./github.js";
+import { nextRound, parseRoundsMarker, renderRoundsMarker, unansweredFindings, type FindingThread } from "./answers.js";
 import { applyLearned, type LearnedItem } from "./falsealarm.js";
 import { buildLearnedContext, renderLearnedSection, type LearnedInput } from "./learnedctx.js";
 import { isLearningBranchHead, isProposalBranchHead } from "./learning.js";
@@ -176,6 +177,8 @@ export interface ReviewResult {
   findings: Finding[];
   /** True when inline findings should be synced (fresh LLM result, not a cache hit). */
   syncInline: boolean;
+  /** Round cap: files whose earlier inline comments were left alone because the AI did not re-review them. */
+  keepInlinePaths?: string[];
   /** Shepherd tier 1 was on for this review (label + config); only present when true. */
   shepherd?: boolean;
   usage: ReviewOutcome & { tokens: number };
@@ -223,6 +226,10 @@ export interface ProduceInput {
   llmCache?: ReviewInput["llmCache"];
   /** Shepherd L5: the head commit is one of Shepherd's own fix commits (no suggestions, no new inline findings). */
   shepherdCommit?: boolean;
+  /** review.answer_findings: MergeJudge's inline threads on the PR. Undefined = could not be read (the check is skipped with a note). */
+  threads?: FindingThread[];
+  /** review.max_rounds: this is round `n`; with `reviewPaths` only those PR files go to the AI (the rest keep their rule lanes and open comments). */
+  round?: { n: number; sinceSha?: string; reviewPaths?: string[] };
   /** Receives the notes rendered into the comment body, so a caller that re-renders the body (runner secret scan) can keep them. */
   onNotes?: (notes: string[]) => void;
 }
@@ -232,6 +239,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
   const { pr, cfg, cfgRef, files, provider, log } = o;
   const number: number = pr.number;
   const notes: string[] = [...(o.reviewNotes ?? [])];
+  const reviewOnly = o.round?.reviewPaths ? new Set(o.round.reviewPaths) : null;
 
   if (isLearningBranchHead(pr.head?.ref, cfg.learning.branch)) {
     const proposal = isProposalBranchHead(pr.head?.ref);
@@ -290,7 +298,8 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
     if (policies.skipped.length) log.info(`Policy files not found or empty: ${policies.skipped.join(", ")}`);
     else if (!cfg.policy_files.length) log.info("Policy files disabled (policy_files: []).");
     const criteria = cfg.rubrics.enabled ? selectCriteria(cfg.rubrics.packs, cfg.rubrics.custom, cfg.rubrics.notes) : [];
-    const { kept, skipped } = excludeFromLlm(files, cfg.diff_exclude);
+    const { kept: allKept, skipped } = excludeFromLlm(files, cfg.diff_exclude);
+    const kept = reviewOnly ? allKept.filter((f) => reviewOnly.has(f.path)) : allKept;
     if (skipped.length) log.info(`Diff excluded from LLM (${skipped.length}): ${skipped.slice(0, 8).join(", ")}${skipped.length > 8 ? "…" : ""}`);
     let context: ContextPiece[] | undefined;
     let mode: "diff" | "context" | "deep" = cfg.review.mode;
@@ -401,10 +410,30 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
     if (res.suppressed.length || res.downgraded.length)
       notes.push(`Known false alarms in this repo: ${res.suppressed.length} finding(s) hidden, ${res.downgraded.length} listed without an inline comment (manage them in the MergeJudge panel).`);
   }
+  const keepInline = reviewOnly ? files.map((f) => f.path).filter((p) => !reviewOnly.has(p)) : [];
+  if (reviewOnly && llm && o.round) {
+    notes.push(`Round ${o.round.n} (cap ${cfg.review.max_rounds}): AI reviewed only the ${reviewOnly.size} file(s) changed since ${(o.round.sinceSha ?? "").slice(0, 7)}; earlier findings on other files stay open.`);
+  }
+  // review.answer_findings: an auto lane needs every AI inline finding answered (fixed, resolved, or replied to with a reason).
+  if (cfg.review.answer_findings && llm) {
+    if (!o.threads) notes.push("Could not read review threads; answer check skipped.");
+    else {
+      const { open } = unansweredFindings(findings, o.threads, new Set(keepInline));
+      if (open > 0) {
+        const reason = `${open} AI finding(s) not answered yet: fix the code or reply on the thread with a reason`;
+        notes.push(reason);
+        if (agg.lane === "auto") {
+          agg.lane = maxLane(agg.lane, "review");
+          agg.labelReasons.push(reason);
+          agg.explanation = explainLane(agg);
+        }
+      }
+    }
+  }
   let story: Story | null = null;
   let storyTokens = 0;
   let storyImageUrl: string | null = null;
-  const storyFiles = excludeFromLlm(files, cfg.diff_exclude).kept;
+  const storyFiles = excludeFromLlm(files, cfg.diff_exclude).kept.filter((f) => !reviewOnly || reviewOnly.has(f.path));
   // Cache-only reviews skip the story call as well. All review/second-pass calls are finished here.
   if (cfg.comment.flow_chart && provider && llm && !cached && !o.skipAi && storyFiles.length) {
     // Story tokens (reported by the provider, else estimated) are shown in the footer only: `usage.tokens` and the llmCache stay review-only.
@@ -439,6 +468,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
     story, storyImageUrl, storyStyle: cfg.comment.flow_chart_style, storyAnimate: cfg.comment.flow_chart_animate,
     ...(whereItSits ? { whereItSits } : {}),
     ...(trimmedFiles.length ? { trimmedFiles } : {}),
+    ...(keepInline.length ? { keepInlinePaths: keepInline } : {}),
     lane: agg.lane, agg, body, findings, syncInline: !!llm && !cached && !o.shepherdCommit, ...(shepherdOn ? { shepherd: true } : {}),
     usage: {
       lane: agg.lane, mode: llm && provider ? usedMode : "rules-only", model: provider?.label ?? null,
@@ -489,7 +519,7 @@ export async function postReviewResult(r: ReviewResult, c: PostContext): Promise
   }
   if (r.syncInline) {
     try {
-      const plan = await syncInlineFindings(ok, repo, r.prNumber, r.headSha, r.findings, log.warning, log.info, `${r.usage.mode}:${r.usage.model ?? "rules-only"}`);
+      const plan = await syncInlineFindings(ok, repo, r.prNumber, r.headSha, r.findings, log.warning, log.info, `${r.usage.mode}:${r.usage.model ?? "rules-only"}`, new Set(r.keepInlinePaths ?? []));
       log.info(`Inline findings: ${plan.create.length} new, ${plan.update.length} updated/resolved.`);
       if (r.shepherd) {
         const n = [...plan.create, ...plan.update].filter((x) => x.body.includes("```suggestion\n")).length;
@@ -553,14 +583,36 @@ export async function runReview(o: ReviewInput): Promise<"auto" | "review" | "bl
     } catch (e) { o.log.warning(`Could not read the head commit for Shepherd: ${(e as Error).message}`); }
   }
   const shepherdCommit = !!head && !reviewGuard(head.message, [], []).syncInline;
+  let reviewNotesOut = reviewNotes;
+  let round: ProduceInput["round"];
+  if (cfg.review.max_rounds > 0 && !learning) {
+    let prev: ReturnType<typeof parseRoundsMarker> = null;
+    try { prev = parseRoundsMarker(await readStickyBody(ok, repo, pr.number)); }
+    catch (e) { o.log.warning(`Could not read the PR comment for the round count: ${(e as Error).message}`); }
+    const n = nextRound(prev, pr.head.sha);
+    round = { n };
+    if (n > cfg.review.max_rounds && prev && prev.sha !== pr.head.sha) {
+      let diff: Awaited<ReturnType<typeof compareChangedFiles>> | null = null;
+      try { diff = await compareChangedFiles(ok, repo, prev.sha, pr.head.sha); }
+      catch (e) { o.log.warning(`Could not compare ${prev.sha.slice(0, 7)}...${pr.head.sha.slice(0, 7)}: ${(e as Error).message}`); }
+      if (diff?.files?.length && diff.status === "ahead") round = { n, sinceSha: prev.sha, reviewPaths: [...new Set(diff.files.filter((f) => !f.removed).map((f) => f.path))] };
+      else reviewNotesOut = [...(reviewNotes ?? []), `Round ${n}: could not diff against ${prev.sha.slice(0, 7)}; reviewed the full PR.`];
+    }
+  }
+  let threads: FindingThread[] | undefined;
+  if (cfg.review.answer_findings && provider) {
+    try { threads = await listFindingThreads(ok, repo, pr.number); }
+    catch (e) { o.log.warning(`Could not read review threads: ${(e as Error).message}`); }
+  }
   const result = await produceReviewResult({
-    shepherdCommit, storyImage: o.storyImage,
+    shepherdCommit, threads, round, storyImage: o.storyImage,
     ref: `${repo.owner}/${repo.repo}#${pr.number}`,
-    pr, cfg, cfgRef, files, configPaths: o.configPaths, provider, providerNote: note, keyNote: o.keyNote, noProviderNote: o.noProviderNote, reviewNotes, skipAi,
+    pr, cfg, cfgRef, files, configPaths: o.configPaths, provider, providerNote: note, keyNote: o.keyNote, noProviderNote: o.noProviderNote, reviewNotes: reviewNotesOut, skipAi,
     readRepoFile: (p, ref) => fetchRepoFile(ok, repo, p, ref),
     contextSource: o.contextSource ?? githubContextSource(ok, repo, pr.head.sha),
     deep: o.deep, retrieveDeep: o.retrieveDeep, learned: o.learned, lessons: o.lessons, outcomeStats: o.outcomeStats, log: o.log, llmCache: o.llmCache,
   });
+  if (round && !learning) result.body = `${result.body}\n${renderRoundsMarker(round.n, pr.head.sha)}`;
   if (shepherdCommit && head) {
     const g = reviewGuard(head.message, head.files, result.findings);
     if (g.pingPong.length && o.onShepherdPingPong) {
