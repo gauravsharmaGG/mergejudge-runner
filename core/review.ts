@@ -4,7 +4,8 @@ import type { Config } from "./config.js";
 import { maxLane, type Lane, type PrFile } from "./types.js";
 import {
   approvePr, createCheckRun, dismissOwnApprovals, enableAutoMerge, fetchPrFiles, fetchRepoFile, UNLISTED_FILES_PATH,
-  syncInlineFindings, upsertStickyComment, readStickyBody, listFindingThreads, compareChangedFiles, githubContextSource, type Octokit, type Repo,
+  syncInlineFindings, upsertStickyComment, readStickyBody, listFindingThreads, compareChangedFiles, githubContextSource,
+  type CommentOwner, type Octokit, type Repo,
 } from "./github.js";
 import { nextRound, parseRoundsMarker, renderRoundsMarker, unansweredFindings, type FindingThread } from "./answers.js";
 import { applyLearned, type LearnedItem } from "./falsealarm.js";
@@ -16,7 +17,7 @@ import { createProvider, type LlmCallUsage, type WorkersAiBinding } from "./llm/
 import type { LlmProvider } from "./llm/provider.js";
 import { canUseTools } from "./llm/provider.js";
 import { filterPolicyPaths, loadPolicies, type Policies } from "./policy.js";
-import { CHECK_NAME, EMOJI, lineFindingsOf, renderComment } from "./render.js";
+import { CHECK_NAME, EMOJI, lineFindingsOf, renderComment, withSummaryMarker } from "./render.js";
 import { selectCriteria } from "./rubrics.js";
 import { excludeFromLlm, isMergeJudgeConfigPath } from "./rules.js";
 import { gatherContext, type ContextPiece, type ContextSource } from "./context.js";
@@ -112,6 +113,12 @@ export interface ReviewInput {
    */
   retrieveDeep?: (kept: PrFile[]) => Promise<{ pieces: ContextPiece[]; notes: string[] }>;
   log: { info: (m: string) => void; warning: (m: string) => void };
+  /**
+   * Post as this bot identity (the Action, next to the hosted App on the same PR): the sticky comment carries
+   * `owner.marker` instead of MARKER, and only that login's comments and threads are ever updated, resolved or
+   * counted. Unset (hosted App, Worker, CLI): MARKER and any Bot, exactly as before.
+   */
+  owner?: CommentOwner;
   /** Shepherd L3: the review flagged lines in files Shepherd's own head commit touched. Called instead of posting inline findings. */
   onShepherdPingPong?: (findings: Finding[], touchedFiles: string[]) => Promise<void>;
   /**
@@ -484,6 +491,8 @@ export interface PostContext {
   cfg: Config;
   appToken: boolean;
   botLogin: string | null;
+  /** Comment owner, as in ReviewInput.owner: the sticky body is posted under owner.marker and only that login's comments are touched. */
+  owner?: CommentOwner;
   /** Custom config file path(s), as in ReviewInput.configPaths. */
   configPaths?: string[];
   log: ReviewInput["log"];
@@ -500,7 +509,9 @@ export function checkFallbackNote(lane: Lane, status?: number): string {
 /** Perform every GitHub write for a ReviewResult: sticky comment, check run, inline findings, approval. */
 export async function postReviewResult(r: ReviewResult, c: PostContext): Promise<Lane> {
   const { ok, repo, cfg, log } = c;
-  await upsertStickyComment(ok, repo, r.prNumber, r.body);
+  // A comment owner posts the same body under its own marker, so two MergeJudges on one PR each keep a summary.
+  const body = c.owner ? withSummaryMarker(r.body, c.owner.marker) : r.body;
+  await upsertStickyComment(ok, repo, r.prNumber, body, c.owner);
   try {
     await createCheckRun(ok, repo, r.headSha, r.agg);
   } catch (e) {
@@ -511,7 +522,7 @@ export async function postReviewResult(r: ReviewResult, c: PostContext): Promise
     if (status !== 403 && status !== 404 && status !== 422) throw e;
     log.warning(`Could not create the ${CHECK_NAME} check run (${status ?? "error"}: ${(e as Error).message}); the lane is in the PR comment instead.`);
     try {
-      await upsertStickyComment(ok, repo, r.prNumber, `${r.body}\n\n${checkFallbackNote(r.lane, status)}`);
+      await upsertStickyComment(ok, repo, r.prNumber, `${body}\n\n${checkFallbackNote(r.lane, status)}`, c.owner);
     } catch (e2) { log.warning(`Could not update the PR comment either: ${(e2 as Error).message}`); }
   }
   if (r.kind === "learning-block") {
@@ -520,7 +531,7 @@ export async function postReviewResult(r: ReviewResult, c: PostContext): Promise
   }
   if (r.syncInline) {
     try {
-      const plan = await syncInlineFindings(ok, repo, r.prNumber, r.headSha, r.findings, log.warning, log.info, `${r.usage.mode}:${r.usage.model ?? "rules-only"}`, new Set(r.keepInlinePaths ?? []));
+      const plan = await syncInlineFindings(ok, repo, r.prNumber, r.headSha, r.findings, log.warning, log.info, `${r.usage.mode}:${r.usage.model ?? "rules-only"}`, new Set(r.keepInlinePaths ?? []), c.owner);
       log.info(`Inline findings: ${plan.create.length} new, ${plan.update.length} updated/resolved.`);
       if (r.shepherd) {
         const n = [...plan.create, ...plan.update].filter((x) => x.body.includes("```suggestion\n")).length;
@@ -588,7 +599,7 @@ export async function runReview(o: ReviewInput): Promise<"auto" | "review" | "bl
   let round: ProduceInput["round"];
   if (cfg.review.max_rounds > 0 && !learning) {
     let prev: ReturnType<typeof parseRoundsMarker> = null;
-    try { prev = parseRoundsMarker(await readStickyBody(ok, repo, pr.number)); }
+    try { prev = parseRoundsMarker(await readStickyBody(ok, repo, pr.number, o.owner)); }
     catch (e) { o.log.warning(`Could not read the PR comment for the round count: ${(e as Error).message}`); }
     const n = nextRound(prev, pr.head.sha);
     round = { n };
@@ -602,7 +613,7 @@ export async function runReview(o: ReviewInput): Promise<"auto" | "review" | "bl
   }
   let threads: FindingThread[] | undefined;
   if (cfg.review.answer_findings && provider) {
-    try { threads = await listFindingThreads(ok, repo, pr.number); }
+    try { threads = await listFindingThreads(ok, repo, pr.number, o.owner); }
     catch (e) { o.log.warning(`Could not read review threads: ${(e as Error).message}`); }
   }
   const result = await produceReviewResult({
@@ -621,7 +632,7 @@ export async function runReview(o: ReviewInput): Promise<"auto" | "review" | "bl
     }
   }
   return postReviewResult(result, {
-    ok, repo, cfg, appToken: o.appToken, botLogin: o.botLogin, configPaths: o.configPaths, log: o.log, onResult: o.onResult, onSnapshot: o.onSnapshot,
+    ok, repo, cfg, appToken: o.appToken, botLogin: o.botLogin, owner: o.owner, configPaths: o.configPaths, log: o.log, onResult: o.onResult, onSnapshot: o.onSnapshot,
   });
 }
 

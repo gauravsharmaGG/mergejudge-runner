@@ -5,6 +5,7 @@ import { appJwt, installationToken } from "../core/appauth.js";
 import { applyProviderOverrides, parseConfig, type Config } from "../core/config.js";
 import { fetchBaseConfig, type Octokit, type Repo } from "../core/github.js";
 import { runFeedback, runPropose, type FeedbackPayload } from "../core/learnflow.js";
+import { ACTION_MARKER } from "../core/render.js";
 import { runReview, type ReviewPr } from "../core/review.js";
 import { createProvider } from "../core/llm/index.js";
 import { routeAutoMode } from "../core/shepherdroute.js";
@@ -95,6 +96,9 @@ async function runTriageMode(): Promise<void> {
   const lane = await runReview({
     storyImage,
     ok, repo, pr: pr as unknown as ReviewPr, cfg, cfgRef, appToken, botLogin,
+    // The hosted App may review the same PR: post under the Action's own marker and only ever touch its own
+    // comments and threads, so the two summaries, round counters and answer gates stay separate.
+    owner: { marker: ACTION_MARKER, login: botLogin ?? "github-actions[bot]" },
     configPaths: [core.getInput("config_path")].filter(Boolean),
     // review.mode: deep reads the repo from the actions/checkout workspace; without one it falls back to context mode.
     retrieveDeep: async (kept) => {

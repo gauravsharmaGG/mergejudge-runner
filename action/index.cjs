@@ -55212,7 +55212,14 @@ function renderStorySection(story, animate = true, style = "svg", imageUrl, char
 
 // core/render.ts
 var MARKER = "<!-- mergejudge:summary -->";
+var ACTION_MARKER = "<!-- mergejudge:summary:action -->";
 var EMOJI = { auto: "\u{1F7E2}", review: "\u{1F7E1}", block: "\u{1F534}" };
+function isSummaryBody(body) {
+  return !!body && (body.includes(MARKER) || body.includes(ACTION_MARKER));
+}
+function withSummaryMarker(body, marker2) {
+  return body.startsWith(MARKER) ? marker2 + body.slice(MARKER.length) : body;
+}
 function escapeMd(s) {
   return s.replace(/\s*[\r\n]+\s*/g, " ").replace(/[\\`*_{}\[\]()<>#+!|~]/g, "\\$&").replace(/&/g, "&amp;").replace(/@/g, "@\u200B").trim();
 }
@@ -55719,6 +55726,7 @@ function isLearningBranchHead(headRef, learningBranch) {
 }
 
 // core/github.ts
+var sameLogin = (a, b) => !!a && a.toLowerCase().replace(/\[bot\]$/, "") === b.toLowerCase().replace(/\[bot\]$/, "");
 var UNLISTED_FILES_PATH = "(more files not listed)";
 async function fetchPrFiles(ok, r, pull, maxFiles) {
   const opts = { ...r, pull_number: pull, per_page: 100 };
@@ -55747,15 +55755,17 @@ async function fetchPrFiles(ok, r, pull, maxFiles) {
   if (more) listed.push({ path: UNLISTED_FILES_PATH, status: "modified", additions: 0, deletions: 0, patch: void 0, previousPath: void 0 });
   return listed;
 }
-async function findStickyComment(ok, r, pull) {
+async function findStickyComment(ok, r, pull, owner) {
   const comments = await ok.paginate(ok.rest.issues.listComments, { ...r, issue_number: pull, per_page: 100 });
-  return comments.find((c) => c.body?.includes(MARKER) && c.user?.type === "Bot");
+  if (!owner) return comments.find((c) => c.body?.includes(MARKER) && c.user?.type === "Bot");
+  const ours = comments.filter((c) => c.user?.type === "Bot" && sameLogin(c.user?.login, owner.login) && (c.body?.includes(owner.marker) || c.body?.includes(MARKER)));
+  return ours.find((c) => c.body?.includes(owner.marker)) ?? ours[0];
 }
-async function readStickyBody(ok, r, pull) {
-  return (await findStickyComment(ok, r, pull))?.body ?? void 0;
+async function readStickyBody(ok, r, pull, owner) {
+  return (await findStickyComment(ok, r, pull, owner))?.body ?? void 0;
 }
-async function upsertStickyComment(ok, r, pull, body) {
-  const existing = await findStickyComment(ok, r, pull);
+async function upsertStickyComment(ok, r, pull, body, owner) {
+  const existing = await findStickyComment(ok, r, pull, owner);
   if (existing) await ok.rest.issues.updateComment({ ...r, comment_id: existing.id, body });
   else await ok.rest.issues.createComment({ ...r, issue_number: pull, body });
 }
@@ -55813,15 +55823,16 @@ async function fetchBaseConfig(ok, r, path2, base, log = () => {
 }
 async function syncInlineFindings(ok, r, pull, headSha2, findings, warn2 = () => {
 }, log = () => {
-}, reviewer, keepPaths = /* @__PURE__ */ new Set()) {
+}, reviewer, keepPaths = /* @__PURE__ */ new Set(), owner) {
   const existing = await ok.paginate(ok.rest.pulls.listReviewComments, { ...r, pull_number: pull, per_page: 100 });
+  const isOurs = (c) => c.user?.type === "Bot" && (!owner || sameLogin(c.user?.login, owner.login));
   const plan = planInline(
     findings,
-    existing.map((c) => ({ id: c.id, body: c.body, isBot: c.user?.type === "Bot" })),
+    existing.map((c) => ({ id: c.id, body: c.body, isBot: isOurs(c) })),
     { sha: headSha2, reviewer },
     keepPaths
   );
-  const ours = new Set(existing.filter((c) => c.user?.type === "Bot").map((c) => c.id));
+  const ours = new Set(existing.filter(isOurs).map((c) => c.id));
   let threads = null;
   for (const u of plan.update) {
     await ok.rest.pulls.updateReviewComment({ ...r, comment_id: u.id, body: u.body });
@@ -55870,7 +55881,7 @@ async function reviewThreadsByRootComment(ok, r, pull) {
   }
   return out;
 }
-async function listFindingThreads(ok, r, pull) {
+async function listFindingThreads(ok, r, pull, owner) {
   const out = [];
   let after = null;
   for (let page = 0; page < 10; page++) {
@@ -55883,7 +55894,8 @@ async function listFindingThreads(ok, r, pull) {
     const rt = res.repository.pullRequest.reviewThreads;
     for (const t of rt.nodes) {
       const [root, ...rest] = t.comments.nodes;
-      const m = root && root.author?.__typename === "Bot" ? parseMarker(root.body) : null;
+      const mine = root && root.author?.__typename === "Bot" && (!owner || sameLogin(root.author?.login, owner.login));
+      const m = mine ? parseMarker(root.body) : null;
       if (!root || !m) continue;
       out.push({
         rootId: root.databaseId,
@@ -56621,7 +56633,7 @@ async function runFeedback(o) {
     log.info("Not a PR comment event; nothing to do.");
     return "ignored";
   }
-  const isStickyPre = !!comment.body?.includes(MARKER) && !!comment.body?.includes(FEEDBACK_MARKER);
+  const isStickyPre = isSummaryBody(comment.body) && !!comment.body?.includes(FEEDBACK_MARKER);
   if (!isStickyPre && !LEARN_CMD.test(comment.body ?? "")) {
     log.info("Comment is not MergeJudge feedback; ignoring.");
     return "ignored";
@@ -56631,7 +56643,7 @@ async function runFeedback(o) {
     log.info("Learning disabled in config.");
     return "ignored";
   }
-  const isSticky = !!comment.body?.includes(MARKER) && !!comment.body?.includes(FEEDBACK_MARKER);
+  const isSticky = isSummaryBody(comment.body) && !!comment.body?.includes(FEEDBACK_MARKER);
   const isLearnCmd = LEARN_CMD.test(comment.body ?? "");
   if (!isSticky && !isLearnCmd) {
     log.info("Comment is not MergeJudge feedback; ignoring.");
@@ -56669,7 +56681,7 @@ async function runFeedback(o) {
   }
   const pr = (await ok.rest.pulls.get({ ...repo, pull_number: issue3.number })).data;
   const outcome = pr.merged ? "merged" : pr.state === "closed" ? "closed" : "open";
-  const sticky = isSticky ? comment.body : (await ok.paginate(ok.rest.issues.listComments, { ...repo, issue_number: issue3.number, per_page: 100 })).find((c) => c.body?.includes(MARKER))?.body ?? "";
+  const sticky = isSticky ? comment.body : (await ok.paginate(ok.rest.issues.listComments, { ...repo, issue_number: issue3.number, per_page: 100 })).find((c) => isSummaryBody(c.body))?.body ?? "";
   const laneMatch = sticky.match(/\*\*Overall lane:\*\*\s*[^\n]*`?(auto|review|block)`?/i);
   const lane = laneMatch?.[1] ?? "review";
   const failed = [...new Set([...sticky.matchAll(/^\s*-\s*❌\s*`([^`]+)`/gm)].map((m) => m[1]))];
@@ -60531,7 +60543,8 @@ function checkFallbackNote(lane, status) {
 }
 async function postReviewResult(r, c) {
   const { ok, repo, cfg, log } = c;
-  await upsertStickyComment(ok, repo, r.prNumber, r.body);
+  const body = c.owner ? withSummaryMarker(r.body, c.owner.marker) : r.body;
+  await upsertStickyComment(ok, repo, r.prNumber, body, c.owner);
   try {
     await createCheckRun(ok, repo, r.headSha, r.agg);
   } catch (e) {
@@ -60539,9 +60552,9 @@ async function postReviewResult(r, c) {
     if (status !== 403 && status !== 404 && status !== 422) throw e;
     log.warning(`Could not create the ${CHECK_NAME} check run (${status ?? "error"}: ${e.message}); the lane is in the PR comment instead.`);
     try {
-      await upsertStickyComment(ok, repo, r.prNumber, `${r.body}
+      await upsertStickyComment(ok, repo, r.prNumber, `${body}
 
-${checkFallbackNote(r.lane, status)}`);
+${checkFallbackNote(r.lane, status)}`, c.owner);
     } catch (e2) {
       log.warning(`Could not update the PR comment either: ${e2.message}`);
     }
@@ -60552,7 +60565,7 @@ ${checkFallbackNote(r.lane, status)}`);
   }
   if (r.syncInline) {
     try {
-      const plan = await syncInlineFindings(ok, repo, r.prNumber, r.headSha, r.findings, log.warning, log.info, `${r.usage.mode}:${r.usage.model ?? "rules-only"}`, new Set(r.keepInlinePaths ?? []));
+      const plan = await syncInlineFindings(ok, repo, r.prNumber, r.headSha, r.findings, log.warning, log.info, `${r.usage.mode}:${r.usage.model ?? "rules-only"}`, new Set(r.keepInlinePaths ?? []), c.owner);
       log.info(`Inline findings: ${plan.create.length} new, ${plan.update.length} updated/resolved.`);
       if (r.shepherd) {
         const n = [...plan.create, ...plan.update].filter((x) => x.body.includes("```suggestion\n")).length;
@@ -60621,7 +60634,7 @@ async function runReview(o) {
   if (cfg.review.max_rounds > 0 && !learning) {
     let prev = null;
     try {
-      prev = parseRoundsMarker(await readStickyBody(ok, repo, pr.number));
+      prev = parseRoundsMarker(await readStickyBody(ok, repo, pr.number, o.owner));
     } catch (e) {
       o.log.warning(`Could not read the PR comment for the round count: ${e.message}`);
     }
@@ -60641,7 +60654,7 @@ async function runReview(o) {
   let threads;
   if (cfg.review.answer_findings && provider) {
     try {
-      threads = await listFindingThreads(ok, repo, pr.number);
+      threads = await listFindingThreads(ok, repo, pr.number, o.owner);
     } catch (e) {
       o.log.warning(`Could not read review threads: ${e.message}`);
     }
@@ -60691,6 +60704,7 @@ ${renderRoundsMarker(round.n, pr.head.sha)}`;
     cfg,
     appToken: o.appToken,
     botLogin: o.botLogin,
+    owner: o.owner,
     configPaths: o.configPaths,
     log: o.log,
     onResult: o.onResult,
@@ -62048,6 +62062,9 @@ async function runTriageMode() {
     cfgRef,
     appToken,
     botLogin,
+    // The hosted App may review the same PR: post under the Action's own marker and only ever touch its own
+    // comments and threads, so the two summaries, round counters and answer gates stay separate.
+    owner: { marker: ACTION_MARKER, login: botLogin ?? "github-actions[bot]" },
     configPaths: [getInput("config_path")].filter(Boolean),
     // review.mode: deep reads the repo from the actions/checkout workspace; without one it falls back to context mode.
     retrieveDeep: async (kept) => {

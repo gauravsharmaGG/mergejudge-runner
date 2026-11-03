@@ -6,8 +6,8 @@ import { FEEDBACK_MARKER, feedbackChanged, parseFeedback } from "../core/feedbac
 import { findingText, inlineBody } from "../core/inline.js";
 import { produceReviewResult } from "../core/review.js";
 import {
-  AUTO_MERGE_NOTE, CHECK_NAME, MAX_COMMENT_CHARS, MARKER, MERGE_NOTE, aiReasonNote, checkSummary, criterionLabel, diffLink, mergeNote,
-  renderComment, renderNote,
+  ACTION_MARKER, AUTO_MERGE_NOTE, CHECK_NAME, MAX_COMMENT_CHARS, MARKER, MERGE_NOTE, aiReasonNote, checkSummary, criterionLabel, diffLink,
+  isSummaryBody, mergeNote, renderComment, renderNote, withSummaryMarker,
 } from "../core/render.js";
 import type { PrFile } from "../core/types.js";
 
@@ -168,6 +168,14 @@ describe("outcome line", () => {
     expect(md.startsWith(`${MARKER}\n## ⚖️ MergeJudge\n\n**Overall lane:**`)).toBe(true);
     const plain = md.split("\n").find((l) => l && !l.startsWith("<") && !l.startsWith("#") && !l.startsWith("*"));
     expect(plain).toBe("Adds a thing.");
+  });
+
+  it("gives the Action a marker the hosted App's MARKER match can never find", () => {
+    expect(ACTION_MARKER).not.toContain(MARKER); // the whole point of a separate marker
+    expect(withSummaryMarker(`${MARKER}\nbody`, ACTION_MARKER)).toBe(`${ACTION_MARKER}\nbody`);
+    expect(isSummaryBody(`${MARKER}\nbody`)).toBe(true);
+    expect(isSummaryBody(`${ACTION_MARKER}\nbody`)).toBe(true);
+    expect(isSummaryBody("no marker")).toBe(false);
   });
 });
 

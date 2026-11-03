@@ -5,7 +5,7 @@ import {
 } from "./github.js";
 import { appendLesson, buildLesson, buildProposal, parseLessons, LESSONS_PATH } from "./learning.js";
 import { labelProposalPr, planProposal, type ExtraEvidence } from "./proposals.js";
-import { MARKER } from "./render.js";
+import { isSummaryBody } from "./render.js";
 
 type Log = { info: (m: string) => void; warning: (m: string) => void };
 
@@ -60,12 +60,12 @@ export async function runFeedback(o: {
     return "ignored";
   }
 
-  const isStickyPre = !!comment.body?.includes(MARKER) && !!comment.body?.includes(FEEDBACK_MARKER);
+  const isStickyPre = isSummaryBody(comment.body) && !!comment.body?.includes(FEEDBACK_MARKER);
   if (!isStickyPre && !LEARN_CMD.test(comment.body ?? "")) { log.info("Comment is not MergeJudge feedback; ignoring."); return "ignored"; }
   const cfg = await o.loadConfig();
   if (!cfg.learning.enabled) { log.info("Learning disabled in config."); return "ignored"; }
 
-  const isSticky = !!comment.body?.includes(MARKER) && !!comment.body?.includes(FEEDBACK_MARKER);
+  const isSticky = isSummaryBody(comment.body) && !!comment.body?.includes(FEEDBACK_MARKER);
   const isLearnCmd = LEARN_CMD.test(comment.body ?? "");
   if (!isSticky && !isLearnCmd) { log.info("Comment is not MergeJudge feedback; ignoring."); return "ignored"; }
 
@@ -104,7 +104,7 @@ export async function runFeedback(o: {
   // Recover lane / failed criteria from the sticky comment when possible.
   const sticky = isSticky ? comment.body! :
     (await ok.paginate(ok.rest.issues.listComments, { ...repo, issue_number: issue.number, per_page: 100 }))
-      .find((c) => c.body?.includes(MARKER))?.body ?? "";
+      .find((c) => isSummaryBody(c.body))?.body ?? "";
   const laneMatch = sticky.match(/\*\*Overall lane:\*\*\s*[^\n]*`?(auto|review|block)`?/i);
   const lane = (laneMatch?.[1] as "auto" | "review" | "block") ?? "review";
   const failed = [...new Set([...sticky.matchAll(/^\s*-\s*❌\s*`([^`]+)`/gm)].map((m) => m[1]!))];

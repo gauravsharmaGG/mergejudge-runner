@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { renderRoundsMarker, parseRoundsMarker } from "../core/answers.js";
 import { parseConfig } from "../core/config.js";
 import { inlineBody } from "../core/inline.js";
-import { escapeMd, MARKER } from "../core/render.js";
+import { ACTION_MARKER, escapeMd, MARKER } from "../core/render.js";
 import { runReview } from "../core/review.js";
 
 const HEAD = "b".repeat(40);
@@ -12,7 +12,10 @@ const finding = { path: "a.md", line: 2, quote: "TODO fix this later", message: 
 const root = { databaseId: 11, body: inlineBody(finding, { sha: PREV }), author: { login: "mj[bot]", __typename: "Bot" } };
 const thread = (replies: object[] = [], resolved = false) => ({ isResolved: resolved, path: "a.md", comments: { nodes: [root, ...replies] } });
 
-interface Opts { yaml?: string; threads?: object[]; sticky?: string; changed?: string[]; status?: string; compareFails?: boolean; threadsFail?: boolean; paths?: string[]; review?: object[] }
+interface Opts {
+  yaml?: string; threads?: object[]; sticky?: string; comments?: object[]; owner?: { marker: string; login: string };
+  changed?: string[]; status?: string; compareFails?: boolean; threadsFail?: boolean; paths?: string[]; review?: object[]; aiFindings?: object[];
+}
 
 /** A fake Octokit (tagged list endpoints, recorded writes) plus a fake Workers AI binding as the model. */
 function setup(o: Opts = {}) {
@@ -22,7 +25,7 @@ function setup(o: Opts = {}) {
   const prompts: string[] = [];
   const data: Record<string, unknown[]> = {
     files: paths.map((p) => ({ filename: p, status: "modified", additions: 2, deletions: 0, patch })),
-    comments: o.sticky === undefined ? [] : [{ id: 5, body: o.sticky, user: { type: "Bot" } }],
+    comments: o.comments ?? (o.sticky === undefined ? [] : [{ id: 5, body: o.sticky, user: { login: "mj[bot]", type: "Bot" } }]),
     reviewComments: o.review ?? [],
   };
   const ok = {
@@ -50,7 +53,7 @@ function setup(o: Opts = {}) {
   const ai = {
     run: async (_m: string, input: { messages: { content: string }[] }) => {
       prompts.push(JSON.stringify(input.messages));
-      return { response: JSON.stringify({ summary: "s", files: paths.map((p) => ({ path: p, lane: "auto", reason: "docs", findings: [finding] })) }) };
+      return { response: JSON.stringify({ summary: "s", files: paths.map((p) => ({ path: p, lane: "auto", reason: "docs", findings: o.aiFindings ?? [finding] })) }) };
     },
   };
   const warn = vi.fn();
@@ -58,6 +61,7 @@ function setup(o: Opts = {}) {
     ok: ok as never, repo: { owner: "o", repo: "r" }, appToken: false, botLogin: null, cfgRef: "main", bindings: { ai },
     pr: { number: 1, node_id: "n", head: { sha: HEAD, ref: "feat" }, labels: [] } as never,
     cfg: parseConfig(`provider:\n  type: workers-ai\n  model: m\n${o.yaml ?? ""}`),
+    ...(o.owner ? { owner: o.owner } : {}),
     contextSource: { listPaths: async () => null, readFile: async () => null, searchSymbol: async () => [] },
     log: { info: vi.fn(), warning: warn },
   });
@@ -159,5 +163,85 @@ describe("runReview max_rounds", () => {
     await s.run();
     expect(n(s, "compare")).toBe(0);
     expect(parseRoundsMarker(s.sticky())).toEqual({ n: 3, sha: HEAD });
+  });
+});
+
+describe("runReview with a comment owner (the Action next to the hosted App)", () => {
+  const owner = { marker: ACTION_MARKER, login: "github-actions[bot]" };
+  // The hosted App's comment on the same PR: MARKER body, its own login.
+  const hosted = { id: 5, body: `${MARKER}\n## ⚖️ MergeJudge\nhosted summary`, user: { login: "mergejudge[bot]", type: "Bot" } };
+  // The Action's own comment: ACTION_MARKER body (GraphQL would report its login without "[bot]").
+  const action = (body: string) => ({ id: 6, body, user: { login: "github-actions", type: "Bot" } });
+
+  it("posts its own new comment and never edits the hosted App's", async () => {
+    const s = setup({ comments: [hosted], owner });
+    expect(await s.run()).toBe("auto");
+    expect(n(s, "updateComment")).toBe(0);
+    const created = s.calls.createComment![0]![0] as { body: string };
+    expect(created.body.startsWith(ACTION_MARKER)).toBe(true);
+    expect(created.body).not.toContain(MARKER);
+  });
+
+  it("takes over an older plain-MARKER comment by the same login, never another bot's", async () => {
+    const legacy = { id: 7, body: `${MARKER}\nold Action comment`, user: { login: "github-actions[bot]", type: "Bot" } };
+    const s = setup({ comments: [hosted, legacy], owner });
+    await s.run();
+    expect(n(s, "createComment")).toBe(0);
+    expect((s.calls.updateComment![0]![0] as { comment_id: number }).comment_id).toBe(7);
+  });
+
+  it("on a second run updates only its own comment and keeps counting rounds", async () => {
+    const hostedR7 = { ...hosted, body: `${hosted.body}\n${renderRoundsMarker(7, PREV)}` };
+    const mine = action(`${ACTION_MARKER}\nold\n${renderRoundsMarker(1, PREV)}`);
+    const s = setup({ yaml: "review:\n  max_rounds: 2\n", comments: [hostedR7, mine], owner });
+    await s.run();
+    expect(n(s, "createComment")).toBe(0);
+    const upd = s.calls.updateComment![0]![0] as { comment_id: number; body: string };
+    expect(upd.comment_id).toBe(6);
+    expect(upd.body.startsWith(ACTION_MARKER)).toBe(true);
+    // Its own marker said round 1, not the hosted App's round 7; the counter increments instead of being lost.
+    expect(parseRoundsMarker(upd.body)).toEqual({ n: 2, sha: HEAD });
+  });
+
+  it("without an owner, MARKER comments still match and ACTION_MARKER comments do not", async () => {
+    const keep = setup({ comments: [hosted] });
+    await keep.run();
+    expect(n(keep, "updateComment")).toBe(1);
+    expect(n(keep, "createComment")).toBe(0);
+
+    const skip = setup({ comments: [action(`${ACTION_MARKER}\nold`)] });
+    await skip.run();
+    expect(n(skip, "updateComment")).toBe(0);
+    expect(n(skip, "createComment")).toBe(1);
+    expect((skip.calls.createComment![0]![0] as { body: string }).body.startsWith(MARKER)).toBe(true);
+  });
+
+  it("counts only its own threads in the answer gate (GraphQL login without [bot])", async () => {
+    const reply = { databaseId: 12, body: "intended, tracked in #12", author: { login: "dev", __typename: "User" } };
+    const mine = {
+      isResolved: false, path: "a.md",
+      comments: { nodes: [{ ...root, databaseId: 13, author: { login: "github-actions", __typename: "Bot" } }, reply] },
+    };
+    const hostedThread = thread(); // same finding key a.md:2, root by mergejudge[bot], unanswered
+    const s = setup({ yaml: answerOn, threads: [hostedThread, mine], owner });
+    expect(await s.run()).toBe("auto");
+    expect(s.sticky()).not.toContain("not answered yet");
+    // Without an owner the hosted App's unanswered thread at the same key fails the gate.
+    const no = setup({ yaml: answerOn, threads: [hostedThread, mine] });
+    expect(await no.run()).toBe("review");
+  });
+
+  it("never updates or resolves another bot's inline comment", async () => {
+    const theirs = [{ id: 21, body: inlineBody(finding, { sha: PREV }), user: { login: "mj[bot]", type: "Bot" } }];
+    // Still flagged: the Action posts its own inline comment instead of editing the hosted App's.
+    const flagged = setup({ review: theirs, owner });
+    await flagged.run();
+    expect(n(flagged, "updateReviewComment")).toBe(0);
+    expect(n(flagged, "createReview")).toBe(1);
+    // No longer flagged: the hosted App's comment is left open (without an owner it would be resolved).
+    const gone = setup({ review: theirs, owner, aiFindings: [] });
+    await gone.run();
+    expect(n(gone, "updateReviewComment")).toBe(0);
+    expect(n(gone, "createReview")).toBe(0);
   });
 });
