@@ -6,6 +6,13 @@ Release notes for `mergejudge-runner`. Versions below match `package.json`, `src
 
 ## Unreleased
 
+Nothing yet.
+
+## 0.7.0
+
+Action release for the "answer every finding" gate (#46). Git tag `v0.7.0`; the Action major tag `v1` points here.
+
+
 - **Optional "answer every finding" and round cap.** `review.answer_findings: true` keeps the lane from being `auto` while an AI inline comment is unanswered: answered means the thread is resolved or a person replied with a reason (at least 8 characters). The lane is only ever raised to `review`, and the summary says why. If the threads cannot be read, the check is skipped with a note. Replies starting with `dismiss:`, `dismissed:` or `won't fix:` now count as dismissals for the learning loop. `review.max_rounds: N` (0 to 10, default 0 = off) makes the AI review only the files changed since the last reviewed commit once a PR passes N reviewed commits; the rules still run on every file, comments on the other files are left alone, and the round count lives in a hidden marker in the summary comment. Both are off by default and change nothing then. Action/CLI only for now: the hosted Worker does not pass threads or rounds yet. The Action now posts under its own hidden summary marker and only ever touches its own comments and threads: next to the hosted MergeJudge app on the same PR it keeps a separate summary comment (so the rounds counter is not lost), its answer gate counts only its own findings, and it never edits or resolves the app's inline comments.
 - **"Not checked" no longer claims policy files are missing when one was loaded.** The default policy files are alternatives (`REVIEW_POLICY.md`, `REVIEW.md`, `APPROVAL_POLICY.md`, `AGENTS.md`, `CLAUDE.md`). If any of them was read, the comment no longer lists the others as "missing or empty". The line appears only when none was found, and then it lists every configured file, `REVIEW.md` included.
 - **Optional "Where it sits" strip.** `comment.where_it_sits: true` adds a collapsed table under the PR story listing, for up to five changed code files, which files import them and which files they import, and flags importers that use an export the PR removed. It uses import lines and code search only (no AI call), is off by default, and never changes lanes or findings.
