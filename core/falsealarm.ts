@@ -111,7 +111,7 @@ export function falseAlarmLines(items: LearnedItem[], delim: string, maxItems: n
 
 // ---------- signals ----------
 
-export const DISMISS_RE = /\b(false[\s-]?positive|not an? (?:bug|issue|problem)|by design|works as intended|won'?t fix|wontfix|noise|not relevant|irrelevant)\b/i;
+export const DISMISS_RE = /\b(false[\s-]?positive|not an? (?:bug|issue|problem)|by design|works as intended|won'?t fix|wontfix|noise|not relevant|irrelevant)\b|^\s*(?:dismiss(?:ed)?|won'?t fix)\s*:/i;
 
 export interface ThreadComment {
   databaseId: number;

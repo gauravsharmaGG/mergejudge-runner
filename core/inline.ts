@@ -3,6 +3,7 @@ import { escapeMd } from "./render.js";
 
 export const INLINE_MARKER = "<!-- mergejudge:inline";
 export const keyOf = (path: string, line: number) => `${path}:${line}`;
+const pathOfKey = (key: string) => key.slice(0, key.lastIndexOf(":"));
 
 /** Longest finding text kept in a resolved comment's hidden marker. */
 export const ORIG_MAX_CHARS = 200;
@@ -84,17 +85,19 @@ const stripMarker = (b: string | undefined) => (b ?? "").replace(/<!--[\s\S]*?--
  * Dedupe by path:line. Existing → update in place; vanished → mark resolved; new → create.
  * An unchanged finding keeps its comment (and so the head/reviewer it was first posted with).
  */
-export function planInline(findings: Finding[], existing: ExistingComment[], ctx: InlineCtx = {}): InlinePlan {
+export function planInline(findings: Finding[], existing: ExistingComment[], ctx: InlineCtx = {}, keepPaths: ReadonlySet<string> = new Set()): InlinePlan {
   const mine = new Map<string, ExistingComment>();
   for (const c of existing) {
     if (!c.isBot) continue;
     const m = parseMarker(c.body);
     if (m && !mine.has(m.key)) mine.set(m.key, c);
   }
+  // Comments on files that were not re-reviewed this round stay exactly as they are: not updated, not resolved.
+  if (keepPaths.size) for (const [key, c] of mine) if (keepPaths.has(pathOfKey(key))) mine.delete(key);
   const plan: InlinePlan = { create: [], update: [] };
   const wanted = new Set<string>();
   for (const f of findings) {
-    if (f.line === undefined) continue;
+    if (f.line === undefined || keepPaths.has(f.path)) continue;
     const key = keyOf(f.path, f.line);
     if (wanted.has(key)) continue;
     wanted.add(key);

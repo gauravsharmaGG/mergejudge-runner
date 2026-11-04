@@ -170,8 +170,12 @@ export const configSchema = z.object({
       mode: z.enum(["diff", "context", "deep"]).default("diff"),
       /** Opt-in test build: the sticky also shows a lane-choice map (raiser-first explanation + bucket counts + per-file lanes). Explanatory only. */
       lane_map: z.boolean().default(false),
+      /** Opt-in: the lane cannot be auto while an AI inline finding is unanswered (fix the code, resolve the thread, or reply with a reason). */
+      answer_findings: z.boolean().default(false),
+      /** Opt-in round cap, 0 = off. After this many reviewed head commits the AI reviews only files changed since the last reviewed commit. Action/CLI only. */
+      max_rounds: z.number().int().min(0).max(10).default(0),
     })
-    .default({ mode: "diff", lane_map: false }),
+    .default({ mode: "diff", lane_map: false, answer_findings: false, max_rounds: 0 }),
   /** Sticky comment options. */
   comment: z
     .object({

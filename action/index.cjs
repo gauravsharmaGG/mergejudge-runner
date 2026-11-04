@@ -54017,8 +54017,12 @@ var configSchema = external_exports.object({
     /** diff = changed hunks only (default). context = + full changed files, their imports and callers. deep = + read-only repo tools backed by an index. */
     mode: external_exports.enum(["diff", "context", "deep"]).default("diff"),
     /** Opt-in test build: the sticky also shows a lane-choice map (raiser-first explanation + bucket counts + per-file lanes). Explanatory only. */
-    lane_map: external_exports.boolean().default(false)
-  }).default({ mode: "diff", lane_map: false }),
+    lane_map: external_exports.boolean().default(false),
+    /** Opt-in: the lane cannot be auto while an AI inline finding is unanswered (fix the code, resolve the thread, or reply with a reason). */
+    answer_findings: external_exports.boolean().default(false),
+    /** Opt-in round cap, 0 = off. After this many reviewed head commits the AI reviews only files changed since the last reviewed commit. Action/CLI only. */
+    max_rounds: external_exports.number().int().min(0).max(10).default(0)
+  }).default({ mode: "diff", lane_map: false, answer_findings: false, max_rounds: 0 }),
   /** Sticky comment options. */
   comment: external_exports.object({
     /** Opt-in: a separate call draws a small "PR story" in the sticky. Advisory; never changes lanes. */
@@ -55208,7 +55212,14 @@ function renderStorySection(story, animate = true, style = "svg", imageUrl, char
 
 // core/render.ts
 var MARKER = "<!-- mergejudge:summary -->";
+var ACTION_MARKER = "<!-- mergejudge:summary:action -->";
 var EMOJI = { auto: "\u{1F7E2}", review: "\u{1F7E1}", block: "\u{1F534}" };
+function isSummaryBody(body) {
+  return !!body && (body.includes(MARKER) || body.includes(ACTION_MARKER));
+}
+function withSummaryMarker(body, marker2) {
+  return body.startsWith(MARKER) ? marker2 + body.slice(MARKER.length) : body;
+}
 function escapeMd(s) {
   return s.replace(/\s*[\r\n]+\s*/g, " ").replace(/[\\`*_{}\[\]()<>#+!|~]/g, "\\$&").replace(/&/g, "&amp;").replace(/@/g, "@\u200B").trim();
 }
@@ -55506,6 +55517,7 @@ ${EMOJI[agg.lane]} Overall lane **${agg.lane}** \u2014 ${n("auto")} auto, ${n("r
 // core/inline.ts
 var INLINE_MARKER = "<!-- mergejudge:inline";
 var keyOf = (path2, line) => `${path2}:${line}`;
+var pathOfKey = (key) => key.slice(0, key.lastIndexOf(":"));
 var ORIG_MAX_CHARS = 200;
 var tok = (s) => (s ?? "").replace(/[^A-Za-z0-9._:/@+-]/g, "_").slice(0, 60);
 var attrs = (a) => Object.entries(a).filter(([, v]) => v).map(([k, v]) => ` ${k}=${encodeURIComponent(v)}`).join("");
@@ -55549,17 +55561,20 @@ function parseMarker(body) {
   return out;
 }
 var stripMarker = (b) => (b ?? "").replace(/<!--[\s\S]*?-->/g, "").trim();
-function planInline(findings, existing, ctx = {}) {
+function planInline(findings, existing, ctx = {}, keepPaths = /* @__PURE__ */ new Set()) {
   const mine = /* @__PURE__ */ new Map();
   for (const c of existing) {
     if (!c.isBot) continue;
     const m = parseMarker(c.body);
     if (m && !mine.has(m.key)) mine.set(m.key, c);
   }
+  if (keepPaths.size) {
+    for (const [key, c] of mine) if (keepPaths.has(pathOfKey(key))) mine.delete(key);
+  }
   const plan = { create: [], update: [] };
   const wanted = /* @__PURE__ */ new Set();
   for (const f of findings) {
-    if (f.line === void 0) continue;
+    if (f.line === void 0 || keepPaths.has(f.path)) continue;
     const key = keyOf(f.path, f.line);
     if (wanted.has(key)) continue;
     wanted.add(key);
@@ -55711,6 +55726,7 @@ function isLearningBranchHead(headRef, learningBranch) {
 }
 
 // core/github.ts
+var sameLogin = (a, b) => !!a && a.toLowerCase().replace(/\[bot\]$/, "") === b.toLowerCase().replace(/\[bot\]$/, "");
 var UNLISTED_FILES_PATH = "(more files not listed)";
 async function fetchPrFiles(ok, r, pull, maxFiles) {
   const opts = { ...r, pull_number: pull, per_page: 100 };
@@ -55739,9 +55755,17 @@ async function fetchPrFiles(ok, r, pull, maxFiles) {
   if (more) listed.push({ path: UNLISTED_FILES_PATH, status: "modified", additions: 0, deletions: 0, patch: void 0, previousPath: void 0 });
   return listed;
 }
-async function upsertStickyComment(ok, r, pull, body) {
+async function findStickyComment(ok, r, pull, owner) {
   const comments = await ok.paginate(ok.rest.issues.listComments, { ...r, issue_number: pull, per_page: 100 });
-  const existing = comments.find((c) => c.body?.includes(MARKER) && c.user?.type === "Bot");
+  if (!owner) return comments.find((c) => c.body?.includes(MARKER) && c.user?.type === "Bot");
+  const ours = comments.filter((c) => c.user?.type === "Bot" && sameLogin(c.user?.login, owner.login) && (c.body?.includes(owner.marker) || c.body?.includes(MARKER)));
+  return ours.find((c) => c.body?.includes(owner.marker)) ?? ours[0];
+}
+async function readStickyBody(ok, r, pull, owner) {
+  return (await findStickyComment(ok, r, pull, owner))?.body ?? void 0;
+}
+async function upsertStickyComment(ok, r, pull, body, owner) {
+  const existing = await findStickyComment(ok, r, pull, owner);
   if (existing) await ok.rest.issues.updateComment({ ...r, comment_id: existing.id, body });
   else await ok.rest.issues.createComment({ ...r, issue_number: pull, body });
 }
@@ -55799,14 +55823,16 @@ async function fetchBaseConfig(ok, r, path2, base, log = () => {
 }
 async function syncInlineFindings(ok, r, pull, headSha2, findings, warn2 = () => {
 }, log = () => {
-}, reviewer) {
+}, reviewer, keepPaths = /* @__PURE__ */ new Set(), owner) {
   const existing = await ok.paginate(ok.rest.pulls.listReviewComments, { ...r, pull_number: pull, per_page: 100 });
+  const isOurs = (c) => c.user?.type === "Bot" && (!owner || sameLogin(c.user?.login, owner.login));
   const plan = planInline(
     findings,
-    existing.map((c) => ({ id: c.id, body: c.body, isBot: c.user?.type === "Bot" })),
-    { sha: headSha2, reviewer }
+    existing.map((c) => ({ id: c.id, body: c.body, isBot: isOurs(c) })),
+    { sha: headSha2, reviewer },
+    keepPaths
   );
-  const ours = new Set(existing.filter((c) => c.user?.type === "Bot").map((c) => c.id));
+  const ours = new Set(existing.filter(isOurs).map((c) => c.id));
   let threads = null;
   for (const u of plan.update) {
     await ok.rest.pulls.updateReviewComment({ ...r, comment_id: u.id, body: u.body });
@@ -55849,6 +55875,36 @@ async function reviewThreadsByRootComment(ok, r, pull) {
     for (const t of rt.nodes) {
       const id = t.comments.nodes[0]?.databaseId;
       if (typeof id === "number") out.set(id, t.id);
+    }
+    if (!rt.pageInfo.hasNextPage) break;
+    after = rt.pageInfo.endCursor;
+  }
+  return out;
+}
+async function listFindingThreads(ok, r, pull, owner) {
+  const out = [];
+  let after = null;
+  for (let page = 0; page < 10; page++) {
+    const res = await ok.graphql(
+      `query($o: String!, $n: String!, $p: Int!, $a: String) { repository(owner: $o, name: $n) { pullRequest(number: $p) {
+        reviewThreads(first: 100, after: $a) { pageInfo { hasNextPage endCursor }
+          nodes { isResolved path comments(first: 30) { nodes { databaseId body author { login __typename } } } } } } } }`,
+      { o: r.owner, n: r.repo, p: pull, a: after }
+    );
+    const rt = res.repository.pullRequest.reviewThreads;
+    for (const t of rt.nodes) {
+      const [root, ...rest] = t.comments.nodes;
+      const mine = root && root.author?.__typename === "Bot" && (!owner || sameLogin(root.author?.login, owner.login));
+      const m = mine ? parseMarker(root.body) : null;
+      if (!root || !m) continue;
+      out.push({
+        rootId: root.databaseId,
+        key: m.key,
+        path: t.path,
+        state: m.state === "resolved" ? "resolved" : "active",
+        isResolved: !!t.isResolved,
+        replies: rest.map((c) => ({ author: c.author?.login ?? null, isBot: c.author?.__typename === "Bot", body: c.body ?? "" }))
+      });
     }
     if (!rt.pageInfo.hasNextPage) break;
     after = rt.pageInfo.endCursor;
@@ -56001,6 +56057,21 @@ function githubContextSource(ok, r, headSha2) {
       return res.data.items.map((i) => i.path);
     }
   };
+}
+async function compareChangedFiles(ok, r, from, to) {
+  const files = [];
+  let status = "";
+  for (let page = 1; page <= 3; page++) {
+    const res = await ok.rest.repos.compareCommitsWithBasehead({ ...r, basehead: `${from}...${to}`, per_page: 100, page });
+    status = res.data.status;
+    const batch = res.data.files ?? [];
+    for (const f of batch) {
+      if (f.status === "renamed" && f.previous_filename) files.push({ path: f.previous_filename, removed: true });
+      files.push({ path: f.filename, removed: f.status === "removed" });
+    }
+    if (batch.length < 100) return { files, status };
+  }
+  return { files: null, status };
 }
 
 // core/proposals.ts
@@ -56562,7 +56633,7 @@ async function runFeedback(o) {
     log.info("Not a PR comment event; nothing to do.");
     return "ignored";
   }
-  const isStickyPre = !!comment.body?.includes(MARKER) && !!comment.body?.includes(FEEDBACK_MARKER);
+  const isStickyPre = isSummaryBody(comment.body) && !!comment.body?.includes(FEEDBACK_MARKER);
   if (!isStickyPre && !LEARN_CMD.test(comment.body ?? "")) {
     log.info("Comment is not MergeJudge feedback; ignoring.");
     return "ignored";
@@ -56572,7 +56643,7 @@ async function runFeedback(o) {
     log.info("Learning disabled in config.");
     return "ignored";
   }
-  const isSticky = !!comment.body?.includes(MARKER) && !!comment.body?.includes(FEEDBACK_MARKER);
+  const isSticky = isSummaryBody(comment.body) && !!comment.body?.includes(FEEDBACK_MARKER);
   const isLearnCmd = LEARN_CMD.test(comment.body ?? "");
   if (!isSticky && !isLearnCmd) {
     log.info("Comment is not MergeJudge feedback; ignoring.");
@@ -56610,7 +56681,7 @@ async function runFeedback(o) {
   }
   const pr = (await ok.rest.pulls.get({ ...repo, pull_number: issue3.number })).data;
   const outcome = pr.merged ? "merged" : pr.state === "closed" ? "closed" : "open";
-  const sticky = isSticky ? comment.body : (await ok.paginate(ok.rest.issues.listComments, { ...repo, issue_number: issue3.number, per_page: 100 })).find((c) => c.body?.includes(MARKER))?.body ?? "";
+  const sticky = isSticky ? comment.body : (await ok.paginate(ok.rest.issues.listComments, { ...repo, issue_number: issue3.number, per_page: 100 })).find((c) => isSummaryBody(c.body))?.body ?? "";
   const laneMatch = sticky.match(/\*\*Overall lane:\*\*\s*[^\n]*`?(auto|review|block)`?/i);
   const lane = laneMatch?.[1] ?? "review";
   const failed = [...new Set([...sticky.matchAll(/^\s*-\s*❌\s*`([^`]+)`/gm)].map((m) => m[1]))];
@@ -56727,6 +56798,46 @@ async function applyApproval(cfg, lane, actions, log = () => {
   if (!cfg.enabled) return say(`approval: disabled; would enable native auto-merge (${cfg.merge_method})`);
   await actions.enableAutoMerge(cfg.merge_method);
   return say(`approval: did enable native auto-merge (${cfg.merge_method})`);
+}
+
+// core/answers.ts
+var MIN_REASON_CHARS = 8;
+var reasonText = (body) => body.split("\n").filter((l) => !/^\s*>/.test(l)).join("\n").trim();
+function isAnswered(t) {
+  if (t.isResolved) return true;
+  return t.replies.some((r) => !r.isBot && reasonText(r.body).length >= MIN_REASON_CHARS);
+}
+function unansweredFindings(findings, threads, keepPaths) {
+  const byKey = /* @__PURE__ */ new Map();
+  for (const t of threads) if (!byKey.has(t.key)) byKey.set(t.key, t);
+  const keys = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const f of findings) {
+    if (f.line === void 0) continue;
+    const key = keyOf(f.path, f.line);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const t = byKey.get(key);
+    if (!t || t.state === "resolved" || !isAnswered(t)) keys.push(key);
+  }
+  for (const t of threads) {
+    if (t.state !== "active" || !keepPaths.has(t.path) || seen.has(t.key)) continue;
+    seen.add(t.key);
+    if (!isAnswered(t)) keys.push(t.key);
+  }
+  return { open: keys.length, keys };
+}
+var ROUNDS_MARKER = "<!-- mergejudge:rounds";
+var renderRoundsMarker = (n, sha) => `${ROUNDS_MARKER} n=${n} sha=${sha} -->`;
+function parseRoundsMarker(body) {
+  const m = body?.match(/<!-- mergejudge:rounds n=(\d{1,4}) sha=([0-9a-f]{7,40}) -->/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return n <= 1e3 ? { n, sha: m[2] } : null;
+}
+function nextRound(prev, headSha2) {
+  if (!prev) return 1;
+  return prev.sha === headSha2 ? prev.n : prev.n + 1;
 }
 
 // core/learnedctx.ts
@@ -60166,6 +60277,7 @@ async function produceReviewResult(o) {
   const { pr, cfg, cfgRef, files, provider, log } = o;
   const number4 = pr.number;
   const notes = [...o.reviewNotes ?? []];
+  const reviewOnly = o.round?.reviewPaths ? new Set(o.round.reviewPaths) : null;
   if (isLearningBranchHead(pr.head?.ref, cfg.learning.branch)) {
     const proposal = isProposalBranchHead(pr.head?.ref);
     const reason = proposal ? "learning proposal: only a human may merge it" : "learning branch `" + cfg.learning.branch + "` must never be merged";
@@ -60230,7 +60342,8 @@ async function produceReviewResult(o) {
     if (policies.skipped.length) log.info(`Policy files not found or empty: ${policies.skipped.join(", ")}`);
     else if (!cfg.policy_files.length) log.info("Policy files disabled (policy_files: []).");
     const criteria = cfg.rubrics.enabled ? selectCriteria(cfg.rubrics.packs, cfg.rubrics.custom, cfg.rubrics.notes) : [];
-    const { kept, skipped } = excludeFromLlm(files, cfg.diff_exclude);
+    const { kept: allKept, skipped } = excludeFromLlm(files, cfg.diff_exclude);
+    const kept = reviewOnly ? allKept.filter((f) => reviewOnly.has(f.path)) : allKept;
     if (skipped.length) log.info(`Diff excluded from LLM (${skipped.length}): ${skipped.slice(0, 8).join(", ")}${skipped.length > 8 ? "\u2026" : ""}`);
     let context3;
     let mode = cfg.review.mode;
@@ -60331,10 +60444,29 @@ async function produceReviewResult(o) {
     if (res.suppressed.length || res.downgraded.length)
       notes.push(`Known false alarms in this repo: ${res.suppressed.length} finding(s) hidden, ${res.downgraded.length} listed without an inline comment (manage them in the MergeJudge panel).`);
   }
+  const keepInline = reviewOnly ? files.map((f) => f.path).filter((p) => !reviewOnly.has(p)) : [];
+  if (reviewOnly && llm && o.round) {
+    notes.push(`Round ${o.round.n} (cap ${cfg.review.max_rounds}): AI reviewed only the ${reviewOnly.size} file(s) changed since ${(o.round.sinceSha ?? "").slice(0, 7)}; earlier findings on other files stay open.`);
+  }
+  if (cfg.review.answer_findings && llm) {
+    if (!o.threads) notes.push("Could not read review threads; answer check skipped.");
+    else {
+      const { open: open3 } = unansweredFindings(findings, o.threads, new Set(keepInline));
+      if (open3 > 0) {
+        const reason = `${open3} AI finding(s) not answered yet: fix the code or reply on the thread with a reason`;
+        notes.push(reason);
+        if (agg.lane === "auto") {
+          agg.lane = maxLane(agg.lane, "review");
+          agg.labelReasons.push(reason);
+          agg.explanation = explainLane(agg);
+        }
+      }
+    }
+  }
   let story = null;
   let storyTokens = 0;
   let storyImageUrl = null;
-  const storyFiles = excludeFromLlm(files, cfg.diff_exclude).kept;
+  const storyFiles = excludeFromLlm(files, cfg.diff_exclude).kept.filter((f) => !reviewOnly || reviewOnly.has(f.path));
   if (cfg.comment.flow_chart && provider && llm && !cached2 && !o.skipAi && storyFiles.length) {
     const drawn = await generateStory(provider, { files: storyFiles, findings, log, model: cfg.provider.model, budgetLeft: reviewCap - reviewSpent });
     ({ story, tokens: storyTokens } = drawn);
@@ -60389,6 +60521,7 @@ async function produceReviewResult(o) {
     storyAnimate: cfg.comment.flow_chart_animate,
     ...whereItSits ? { whereItSits } : {},
     ...trimmedFiles.length ? { trimmedFiles } : {},
+    ...keepInline.length ? { keepInlinePaths: keepInline } : {},
     lane: agg.lane,
     agg,
     body,
@@ -60410,7 +60543,8 @@ function checkFallbackNote(lane, status) {
 }
 async function postReviewResult(r, c) {
   const { ok, repo, cfg, log } = c;
-  await upsertStickyComment(ok, repo, r.prNumber, r.body);
+  const body = c.owner ? withSummaryMarker(r.body, c.owner.marker) : r.body;
+  await upsertStickyComment(ok, repo, r.prNumber, body, c.owner);
   try {
     await createCheckRun(ok, repo, r.headSha, r.agg);
   } catch (e) {
@@ -60418,9 +60552,9 @@ async function postReviewResult(r, c) {
     if (status !== 403 && status !== 404 && status !== 422) throw e;
     log.warning(`Could not create the ${CHECK_NAME} check run (${status ?? "error"}: ${e.message}); the lane is in the PR comment instead.`);
     try {
-      await upsertStickyComment(ok, repo, r.prNumber, `${r.body}
+      await upsertStickyComment(ok, repo, r.prNumber, `${body}
 
-${checkFallbackNote(r.lane, status)}`);
+${checkFallbackNote(r.lane, status)}`, c.owner);
     } catch (e2) {
       log.warning(`Could not update the PR comment either: ${e2.message}`);
     }
@@ -60431,7 +60565,7 @@ ${checkFallbackNote(r.lane, status)}`);
   }
   if (r.syncInline) {
     try {
-      const plan = await syncInlineFindings(ok, repo, r.prNumber, r.headSha, r.findings, log.warning, log.info, `${r.usage.mode}:${r.usage.model ?? "rules-only"}`);
+      const plan = await syncInlineFindings(ok, repo, r.prNumber, r.headSha, r.findings, log.warning, log.info, `${r.usage.mode}:${r.usage.model ?? "rules-only"}`, new Set(r.keepInlinePaths ?? []), c.owner);
       log.info(`Inline findings: ${plan.create.length} new, ${plan.update.length} updated/resolved.`);
       if (r.shepherd) {
         const n = [...plan.create, ...plan.update].filter((x) => x.body.includes("```suggestion\n")).length;
@@ -60495,8 +60629,40 @@ async function runReview(o) {
     }
   }
   const shepherdCommit = !!head && !reviewGuard(head.message, [], []).syncInline;
+  let reviewNotesOut = reviewNotes;
+  let round;
+  if (cfg.review.max_rounds > 0 && !learning) {
+    let prev = null;
+    try {
+      prev = parseRoundsMarker(await readStickyBody(ok, repo, pr.number, o.owner));
+    } catch (e) {
+      o.log.warning(`Could not read the PR comment for the round count: ${e.message}`);
+    }
+    const n = nextRound(prev, pr.head.sha);
+    round = { n };
+    if (n > cfg.review.max_rounds && prev && prev.sha !== pr.head.sha) {
+      let diff = null;
+      try {
+        diff = await compareChangedFiles(ok, repo, prev.sha, pr.head.sha);
+      } catch (e) {
+        o.log.warning(`Could not compare ${prev.sha.slice(0, 7)}...${pr.head.sha.slice(0, 7)}: ${e.message}`);
+      }
+      if (diff?.files?.length && diff.status === "ahead") round = { n, sinceSha: prev.sha, reviewPaths: [...new Set(diff.files.filter((f) => !f.removed).map((f) => f.path))] };
+      else reviewNotesOut = [...reviewNotes ?? [], `Round ${n}: could not diff against ${prev.sha.slice(0, 7)}; reviewed the full PR.`];
+    }
+  }
+  let threads;
+  if (cfg.review.answer_findings && provider) {
+    try {
+      threads = await listFindingThreads(ok, repo, pr.number, o.owner);
+    } catch (e) {
+      o.log.warning(`Could not read review threads: ${e.message}`);
+    }
+  }
   const result = await produceReviewResult({
     shepherdCommit,
+    threads,
+    round,
     storyImage: o.storyImage,
     ref: `${repo.owner}/${repo.repo}#${pr.number}`,
     pr,
@@ -60508,7 +60674,7 @@ async function runReview(o) {
     providerNote: note2,
     keyNote: o.keyNote,
     noProviderNote: o.noProviderNote,
-    reviewNotes,
+    reviewNotes: reviewNotesOut,
     skipAi,
     readRepoFile: (p, ref) => fetchRepoFile(ok, repo, p, ref),
     contextSource: o.contextSource ?? githubContextSource(ok, repo, pr.head.sha),
@@ -60520,6 +60686,8 @@ async function runReview(o) {
     log: o.log,
     llmCache: o.llmCache
   });
+  if (round && !learning) result.body = `${result.body}
+${renderRoundsMarker(round.n, pr.head.sha)}`;
   if (shepherdCommit && head) {
     const g2 = reviewGuard(head.message, head.files, result.findings);
     if (g2.pingPong.length && o.onShepherdPingPong) {
@@ -60536,6 +60704,7 @@ async function runReview(o) {
     cfg,
     appToken: o.appToken,
     botLogin: o.botLogin,
+    owner: o.owner,
     configPaths: o.configPaths,
     log: o.log,
     onResult: o.onResult,
@@ -61893,6 +62062,9 @@ async function runTriageMode() {
     cfgRef,
     appToken,
     botLogin,
+    // The hosted App may review the same PR: post under the Action's own marker and only ever touch its own
+    // comments and threads, so the two summaries, round counters and answer gates stay separate.
+    owner: { marker: ACTION_MARKER, login: botLogin ?? "github-actions[bot]" },
     configPaths: [getInput("config_path")].filter(Boolean),
     // review.mode: deep reads the repo from the actions/checkout workspace; without one it falls back to context mode.
     retrieveDeep: async (kept) => {

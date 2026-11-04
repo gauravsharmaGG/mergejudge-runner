@@ -8,7 +8,22 @@ import type { RubricResult } from "./rubrics.js";
 import { LANE_ORDER, type FileVerdict, type Lane } from "./types.js";
 
 export const MARKER = "<!-- mergejudge:summary -->";
+/**
+ * The GitHub Action's own summary marker. It must never contain MARKER as a substring, so the hosted App's
+ * findStickyComment (MARKER + any Bot) cannot match the Action's comment when both review the same PR.
+ */
+export const ACTION_MARKER = "<!-- mergejudge:summary:action -->";
 export const EMOJI: Record<Lane, string> = { auto: "🟢", review: "🟡", block: "🔴" };
+
+/** A sticky-comment body under either marker: the hosted App's (MARKER) or the Action's (ACTION_MARKER). */
+export function isSummaryBody(body: string | undefined): boolean {
+  return !!body && (body.includes(MARKER) || body.includes(ACTION_MARKER));
+}
+
+/** Swap the leading summary marker of a rendered body for a comment owner's own marker. */
+export function withSummaryMarker(body: string, marker: string): string {
+  return body.startsWith(MARKER) ? marker + body.slice(MARKER.length) : body;
+}
 
 /** Make untrusted text safe inside a single markdown line / table cell. */
 export function escapeMd(s: string): string {

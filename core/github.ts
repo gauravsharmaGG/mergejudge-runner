@@ -2,13 +2,25 @@ import type * as github from "@actions/github";
 import type { PrFile } from "./types.js";
 import { CHECK_CONCLUSION, CHECK_NAME, MARKER, checkSummary } from "./render.js";
 import type { Aggregate } from "./aggregate.js";
-import { planInline, type InlinePlan } from "./inline.js";
+import { parseMarker, planInline, type InlinePlan } from "./inline.js";
+import type { FindingThread } from "./answers.js";
 import type { Finding } from "./triage.js";
 import { LEARNING_BRANCH, LESSONS_PATH } from "./learning.js";
 import { createGuardedWriter, LEGACY_PROPOSAL_BRANCH, PROPOSAL_BRANCH_PREFIX, type GitWriter } from "./writes.js";
 
 export type Octokit = ReturnType<typeof github.getOctokit>;
 export interface Repo { owner: string; repo: string }
+
+/**
+ * A second MergeJudge posting as its own bot identity next to the hosted App (the GitHub Action): its sticky
+ * comment carries `marker` instead of MARKER, and only comments/threads authored by `login` are ever touched,
+ * so the two never overwrite each other's summary or count each other's findings.
+ */
+export interface CommentOwner { marker: string; login: string }
+
+/** Same bot identity: REST says "github-actions[bot]", GraphQL "github-actions". */
+const sameLogin = (a: string | null | undefined, b: string) =>
+  !!a && a.toLowerCase().replace(/\[bot\]$/, "") === b.toLowerCase().replace(/\[bot\]$/, "");
 
 /** Stands in for the files a bounded listing did not fetch. It has no patch, so the rules raise the lane to at least `review`. */
 export const UNLISTED_FILES_PATH = "(more files not listed)";
@@ -43,9 +55,27 @@ export async function fetchPrFiles(ok: Octokit, r: Repo, pull: number, maxFiles?
   return listed;
 }
 
-export async function upsertStickyComment(ok: Octokit, r: Repo, pull: number, body: string): Promise<void> {
+/**
+ * The sticky comment to take over. Without `owner`: any Bot comment carrying MARKER (the hosted App).
+ * With `owner`: only the owner's own comment — one carrying its marker, or (migration from before the
+ * split) an older comment by the same login still carrying the plain MARKER. Another bot's MARKER
+ * comment is never matched.
+ */
+async function findStickyComment(ok: Octokit, r: Repo, pull: number, owner?: CommentOwner) {
   const comments = await ok.paginate(ok.rest.issues.listComments, { ...r, issue_number: pull, per_page: 100 });
-  const existing = comments.find((c) => c.body?.includes(MARKER) && c.user?.type === "Bot");
+  if (!owner) return comments.find((c) => c.body?.includes(MARKER) && c.user?.type === "Bot");
+  const ours = comments.filter((c) =>
+    c.user?.type === "Bot" && sameLogin(c.user?.login, owner.login) && (c.body?.includes(owner.marker) || c.body?.includes(MARKER)));
+  return ours.find((c) => c.body?.includes(owner.marker)) ?? ours[0];
+}
+
+/** Body of our sticky comment, or undefined when there is none yet. */
+export async function readStickyBody(ok: Octokit, r: Repo, pull: number, owner?: CommentOwner): Promise<string | undefined> {
+  return (await findStickyComment(ok, r, pull, owner))?.body ?? undefined;
+}
+
+export async function upsertStickyComment(ok: Octokit, r: Repo, pull: number, body: string, owner?: CommentOwner): Promise<void> {
+  const existing = await findStickyComment(ok, r, pull, owner);
   if (existing) await ok.rest.issues.updateComment({ ...r, comment_id: existing.id, body });
   else await ok.rest.issues.createComment({ ...r, issue_number: pull, body });
 }
@@ -120,14 +150,19 @@ export async function fetchBaseConfig(
 export async function syncInlineFindings(
   ok: Octokit, r: Repo, pull: number, headSha: string, findings: Finding[],
   warn: (m: string) => void = () => {}, log: (m: string) => void = () => {}, reviewer?: string,
+  keepPaths: ReadonlySet<string> = new Set(), owner?: CommentOwner,
 ): Promise<InlinePlan> {
   const existing = await ok.paginate(ok.rest.pulls.listReviewComments, { ...r, pull_number: pull, per_page: 100 });
+  // With an owner, another bot's inline comments are treated as a human's: never updated, never resolved.
+  const isOurs = (c: { user?: { login?: string; type?: string } | null }) =>
+    c.user?.type === "Bot" && (!owner || sameLogin(c.user?.login, owner.login));
   const plan = planInline(
     findings,
-    existing.map((c) => ({ id: c.id, body: c.body, isBot: c.user?.type === "Bot" })),
+    existing.map((c) => ({ id: c.id, body: c.body, isBot: isOurs(c) })),
     { sha: headSha, reviewer },
+    keepPaths,
   );
-  const ours = new Set(existing.filter((c) => c.user?.type === "Bot").map((c) => c.id));
+  const ours = new Set(existing.filter(isOurs).map((c) => c.id));
   let threads: Map<number, string> | null = null;
   for (const u of plan.update) {
     await ok.rest.pulls.updateReviewComment({ ...r, comment_id: u.id, body: u.body });
@@ -169,6 +204,37 @@ export async function reviewThreadsByRootComment(ok: Octokit, r: Repo, pull: num
     for (const t of rt.nodes) {
       const id = t.comments.nodes[0]?.databaseId;
       if (typeof id === "number") out.set(id, t.id);
+    }
+    if (!rt.pageInfo.hasNextPage) break;
+    after = rt.pageInfo.endCursor;
+  }
+  return out;
+}
+
+/**
+ * MergeJudge's inline finding threads on a PR (root comment is ours and carries a marker), with the replies under each.
+ * With `owner`, only the owner's own threads are returned, so the answer gate counts its findings alone.
+ */
+export async function listFindingThreads(ok: Octokit, r: Repo, pull: number, owner?: CommentOwner): Promise<FindingThread[]> {
+  const out: FindingThread[] = [];
+  let after: string | null = null;
+  for (let page = 0; page < 10; page++) {
+    const res: any = await ok.graphql(
+      `query($o: String!, $n: String!, $p: Int!, $a: String) { repository(owner: $o, name: $n) { pullRequest(number: $p) {
+        reviewThreads(first: 100, after: $a) { pageInfo { hasNextPage endCursor }
+          nodes { isResolved path comments(first: 30) { nodes { databaseId body author { login __typename } } } } } } } }`,
+      { o: r.owner, n: r.repo, p: pull, a: after },
+    );
+    const rt = res.repository.pullRequest.reviewThreads;
+    for (const t of rt.nodes) {
+      const [root, ...rest] = t.comments.nodes as { databaseId: number; body: string; author: { login: string; __typename: string } | null }[];
+      const mine = root && root.author?.__typename === "Bot" && (!owner || sameLogin(root.author?.login, owner.login));
+      const m = mine ? parseMarker(root.body) : null;
+      if (!root || !m) continue;
+      out.push({
+        rootId: root.databaseId, key: m.key, path: t.path, state: m.state === "resolved" ? "resolved" : "active", isResolved: !!t.isResolved,
+        replies: rest.map((c) => ({ author: c.author?.login ?? null, isBot: c.author?.__typename === "Bot", body: c.body ?? "" })),
+      });
     }
     if (!rt.pageInfo.hasNextPage) break;
     after = rt.pageInfo.endCursor;
