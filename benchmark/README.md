@@ -132,3 +132,5 @@ On the guide's summary of the same offline leaderboard, `--deep` was described a
 ## Reproduce and tell us
 
 External maintainers are invited to rerun `mergejudge-runner@0.6.1` in default and `--deep` mode, score with the upstream judge, and open an issue on [gauravsharmaGG/mergejudge-runner](https://github.com/gauravsharmaGG/mergejudge-runner/issues) with the command, the judge model, and TP, FP, FN, precision, recall, and F1. A per-language breakdown is especially useful. Please do not post API keys, private diffs, or provider payloads.
+
+Bench-only experiment on skipping the deep pass with a risk gate: [`risk-gate/`](./risk-gate/README.md).
