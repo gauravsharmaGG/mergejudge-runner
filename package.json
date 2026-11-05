@@ -1,6 +1,6 @@
 {
   "name": "mergejudge-runner",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "license": "MIT",
   "type": "module",
   "description": "Open-source AI code review tool and GitHub Action for pull requests: deterministic base-branch rules (auto, review, block) + AST and LLM verification (Claude Code, Codex, OpenAI, Anthropic, Ollama, GLM).",
