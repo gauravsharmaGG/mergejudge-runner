@@ -57,7 +57,7 @@
     "@actions/github": "^9.1.1",
     "@types/node": "^22.20.5",
     "esbuild": "^0.28.2",
-    "minimatch": "^10.2.6",
+    "minimatch": "^11.0.1",
     "typescript": "^7.0.2",
     "vitest": "^5.0.4",
     "yaml": "^2.9.1",
