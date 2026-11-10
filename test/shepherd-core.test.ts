@@ -426,7 +426,7 @@ describe("config and files", () => {
     expect(sec).not.toMatch(/[—–→]/);
     expect(sec).toContain("max_fix_lines");
     const log = readFileSync(join(root, "CHANGELOG.md"), "utf8");
-    const unreleased = log.slice(log.indexOf("## 0.7.0"), log.indexOf("## 0.6.1"));
+    const unreleased = log.slice(log.indexOf("## 0.8.0"), log.indexOf("## 0.6.1"));
     expect(unreleased).not.toMatch(/[—–→]/);
     expect(unreleased).toContain("tier 2");
   });

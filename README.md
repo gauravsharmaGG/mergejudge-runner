@@ -185,7 +185,7 @@ No `actions/checkout` step is needed for the default modes (add one for deep mod
 
 ## CLI Usage
 
-`mergejudge-runner` is the CLI in this package (Node >= 20). After `npm i -g mergejudge-runner` or `npx mergejudge-runner@0.7.0`, these commands are the ones that exist:
+`mergejudge-runner` is the CLI in this package (Node >= 20). After `npm i -g mergejudge-runner` or `npx mergejudge-runner@0.8.0`, these commands are the ones that exist:
 
 ```sh
 mergejudge-runner --help
@@ -533,6 +533,7 @@ The summary also explains the `mergejudge/lane` check: `review` is advisory (the
 
 Full history: [CHANGELOG.md](./CHANGELOG.md).
 
+- **0.8.0**: optional proof tests (beta, off by default, runner/CLI only): on red-lane or REVIEW.md-sensitive PRs, the runner can write a test that passes on the PR base and fails on the head, then mark the finding `🧪 Proven by test` and include the test in a collapsed block. JavaScript and Python on Linux with a bubblewrap sandbox. Owner-enabled (flag, env, or runner config; not `.mergejudge.yml`). See CHANGELOG.md for details.
 - **0.7.0**: optional "answer every finding" gate (`review.answer_findings: true`) and review round cap (`review.max_rounds`), both off by default, Action/CLI only; the Action keeps its own summary comment next to the hosted app. Also: optional "Where it sits" import strip (`comment.where_it_sits: true`), `REVIEW.md` as a default policy file, default `budget.max_tokens_per_pr` raised from 28000 to 40000, fairer diff sharing on big PRs, the optional PR story chart, and Shepherd (beta). See CHANGELOG.md for details.
 - **0.6.1**: npm and Marketplace AEO metadata (description, keywords, action copy) plus the docs that ship with that package. This is the published version of `ai.mode: deep` (CLI `--deep` / `--mode deep`, Action `review_mode`, `MERGEJUDGE_MODE`, `INPUT_REVIEW_MODE`): a second pass for cross-hunk defects. A finding from that pass is kept only when its quote matches the diff. The fast default stays one pass. Martian Code-Review-Bench (50 pull requests, Core profile): `--deep` 75.9% precision, 38.0% recall, 50.6% raw F1, 1.58 comments per pull request, about 28 seconds; fast default 75.0% precision, 28.5% recall, 41.3% raw F1, 1.20 comments per pull request, about 15 seconds. The deep-pass commit still had `"version": "0.6.0"` and was labeled 0.6.1 by the release commit.
 - **0.6.0**: the Action can run an optional security review: set `review.security: true` under `review:` in `.mergejudge.yml` (off by default) to also score the `sec.audit.*` checks. Includes the 0.5.2 docs changes (API key secret documented as `AI_API_KEY`). Action only; the hosted runner does not read this key.

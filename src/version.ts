@@ -1,4 +1,4 @@
-export const VERSION = "0.7.0";
+export const VERSION = "0.8.0";
 /** Review modes this runner can execute. */
 export const MODES = ["diff", "context", "deep"] as const;
 /** Optional abilities announced at register and heartbeat. `local-code`: deep reviews from this machine's own git clone (payload v2). */
