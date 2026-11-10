@@ -6,7 +6,7 @@ Release notes for `mergejudge-runner`. Versions below match `package.json`, `src
 
 ## Unreleased
 
-Nothing yet.
+- **Proof tests (beta, runner only, off by default).** `--proof-tests` (or `MERGEJUDGE_PROOF_TESTS=1`, or `proofTests.enabled` in the runner config) lets the reviewer write a small executable test for up to `--proof-tests-max` (default 3) high-severity findings on red-lane PRs and PRs touching paths that `REVIEW.md` marks sensitive, and run it against the PR's base and head inside a no-network, read-only bubblewrap sandbox. A finding whose test passes on base, fails with an assertion on head and repeats on a rerun is marked as proven and gets the test in a collapsed block; anything else posts as before, and a proof test that cannot run never fails the review. Local-clone jobs only, JavaScript and Python only, Linux only. With the flag off nothing changes. No `.mergejudge.yml` key: the runner owner decides. See the README.
 
 ## 0.7.0
 

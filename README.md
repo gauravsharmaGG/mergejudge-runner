@@ -378,6 +378,50 @@ When a limit stops the build, the review says "Deep mode used a partial index (N
 
 The clone and the snapshots (which contain code chunks) live under `MERGEJUDGE_HOME` on the runner machine. The Worker also skips building its own R2/Vectorize index for such repos. When AI review is on, the prompt built from that local checkout is still sent to the engine you configured (Claude Code, Codex, GLM, or another provider on that machine). A local engine keeps that call on the machine. A cloud model receives the diff and retrieved context directly from the runner.
 
+## Proof tests (beta, off by default)
+
+Inspired by Meta's [Catching JiTTests](https://engineering.fb.com/2026/10/29/security/catching-bugs-before-they-land-jittestings-human-on-the-loop-approach-at-full-scale/) ([paper](https://arxiv.org/abs/2601.22832)). For serious findings, instead of only commenting, the reviewer writes a small executable test that **passes on the PR's base commit and fails on the PR head**. A finding whose test does exactly that is marked `🧪 Proven by test` and the test is attached in a collapsed block, ready to commit. Every other finding is posted as it always was, with no badge. A proof test that cannot be written or run never fails or changes the review.
+
+This is **beta**, runner only (the hosted Workers AI path cannot execute code and is untouched), and **it executes code from the pull request on your machine**, so read [what limits that](#what-limits-it) first.
+
+**Turn it on (runner owner only).** Off by default; with it off nothing here runs, no extra model call is made and the review is byte-identical. The reviewed repository's `.mergejudge.yml` cannot turn it on, because repo content is untrusted on your machine. Precedence: flag, environment, config file, default.
+
+| Setting | Default | Allowed range | Environment | Flag | Config file (`proofTests`) |
+|---|---|---|---|---|---|
+| Enabled | off | | `MERGEJUDGE_PROOF_TESTS=1` | `--proof-tests` | `enabled` |
+| Proof tests per PR (cost cap) | 3 | 1 to 10 | `MERGEJUDGE_PROOF_TESTS_MAX` | `--proof-tests-max` | `maxPerPr` |
+| Seconds per test run | 20 | 2 to 120 | `MERGEJUDGE_PROOF_TESTS_TIMEOUT_SECONDS` | `--proof-tests-timeout-seconds` | `timeoutSeconds` |
+
+```sh
+mergejudge-runner run --proof-tests --proof-tests-max 2
+```
+
+**When it runs.** All of these must hold:
+
+1. the flag is on and the job is a local-clone job (`review.mode: deep` and `runner.code_source: local`), because the runner needs the base and head commits on disk;
+2. the PR lane is `block` (the red lane), or the PR touches a path that the base branch's `REVIEW.md` marks sensitive. Mark paths with a heading that contains the word "sensitive" and backticked globs (a trailing `/` means the whole directory):
+
+   ```md
+   ## Sensitive paths
+   - `src/auth/**`
+   - `billing/`
+   ```
+
+   `REVIEW.md` must be among the policy files the review reads (it is by default). Other policy files are not scanned for this;
+3. a usable sandbox exists (below). Without one, proof tests are skipped with a log line and the review is posted as usual.
+
+**What it does.**
+
+1. **Intent.** One model call states in one line what the PR claims to do and what could break, and rates each line-anchored finding (`high`, `medium`, `low`) and whether it can be shown by a small in-memory test. Only findings rated `high` and testable are tried, at most the cap, in finding order. Findings without a verified line, and files other than JavaScript (`.js`, `.mjs`, `.cjs`) and Python (`.py`), are not tried. The intent and risk lines appear in the "Proof tests" section only when something was proven.
+2. **Generate.** One model call per selected finding writes one test file (`node:test` or `unittest`, standard library only).
+3. **Rule filter, before anything runs.** The test must be short, use the framework and an assertion, and must not import network or process modules, call `fetch`, `eval`, write files, or name absolute system paths.
+4. **Run.** The runner exports the base and head commits into a temporary directory (no `.git`, nothing in your clone changes) and runs the test against each inside the sandbox with a hard time limit. A finding is **proven** only if the test passes on base, fails with an *assertion failure* on head (a crash, import error, syntax error or timeout does not count), gives the same two results on a rerun, and leaves both checkouts unchanged outside its scratch directory.
+5. **Post.** Proven findings get the badge in the inline comment, and the summary comment gets a "Proof tests (beta)" section above the footer with each test in a collapsed block. The lane is never changed by a proof.
+
+**What limits it.** The test is model-written code that runs next to code from the PR. It only runs in a [bubblewrap](https://github.com/containers/bubblewrap) sandbox (Linux, unprivileged user namespaces): no network, a read-only view of system directories and the checkout, your home directory and runner config are not visible, a private `/tmp`, an empty environment (no tokens), and the scratch directory is the only writable path. The runner probes this at start; where it is unavailable (macOS, Windows, locked-down containers) proof tests are skipped. Memory and CPU are not capped, only wall-clock time. The test code is also only as good as the model: a proof shows the test fails on head, not that the test captures the right requirement. Dependencies are not installed (there is no network), so repos whose code needs `node_modules` or Python packages will mostly come out unproven. A very large checkout (over 20,000 files) is skipped.
+
+**Learning.** Dismissals of inline findings already feed the learning loop (Worker side). Proven findings carry the `🧪 Proven by test:` prefix in their text so a dismissal of a proven finding can be told apart. Recording that as a separate "not a bug here" signal needs a Worker-side store; this repository only produces results, so it is not wired yet (marked with a TODO in `src/proof/index.ts`).
+
 ## Status
 
 ```sh
@@ -397,6 +441,7 @@ Logs go to stderr.
 
 - **Use your own login, for your own repos.** The `claude-code` engine uses *your* Claude subscription login on *your* machine. Do not share one subscription with a team or run it for an organisation; check the terms of your Claude plan, and prefer API-key engines where they apply. This is not legal advice.
 - **`ANTHROPIC_API_KEY` must stay unset.** If it is set, Claude Code bills the API instead of your subscription. The runner never passes it (or `ANTHROPIC_AUTH_TOKEN`, any `MERGEJUDGE_*`, `OPENAI_*`, `GITHUB_*`, `AWS_*`, the runner token) to `claude`. The child gets a minimal allowlist copy of the environment (`PATH`, `HOME`, `USER`, `LANG`, `TMPDIR`, `XDG_*`, `CLAUDE_CONFIG_DIR`, proxy and CA variables, `CLAUDE_CODE_OAUTH_TOKEN` for `claude setup-token` logins). Unset `ANTHROPIC_API_KEY` in your own shell/service too, so `claude` is not confused by your global setup.
+- **Proof tests execute PR code (beta, off by default).** With `--proof-tests` the runner runs a model-written test against the PR's base and head checkouts. That is the one place PR code runs on your machine, so it only happens inside a bubblewrap sandbox with no network, read-only system and checkout directories, no home directory and an empty environment, and is skipped when the sandbox is unavailable. See [Proof tests](#proof-tests-beta-off-by-default).
 - **PR content is untrusted.** The prompt goes to `claude -p` on **stdin** (never argv, so it is not visible in `ps`), the CLI runs with `--tools ""` (no tools at all), an empty temp directory as cwd, no session persistence, and no slash commands. The model can only answer with text, which the shared parser validates; the server then applies its own floor (a runner can raise a lane, never lower it).
 - **Token storage.** The runner token (`mjr_a_...`) is a bearer credential for your installation's review jobs. It lives only in the 0600 config file; it is never logged (logs hold job ids, repo/PR numbers, durations and sizes; a redaction filter masks token shapes as a safety net) and never passed to the engine. Revoke or rotate it in the panel if a machine is lost. The runner follows no redirects, so the token cannot be forwarded to another origin.
 - **What the runner sees.** Job payloads contain the PR diff, title/body, the repo's policy files and (context mode) related files. Nothing is written to disk by the runner except the config file (and, in local-code mode, the clone and index cache).
