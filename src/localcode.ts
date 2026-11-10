@@ -98,6 +98,9 @@ function accessMessage(owner: string, repo: string, url: string): string {
 
 const gitDirOf = (o: LocalCodeOptions, key: string) => join(o.paths.repos, `${key}.git`);
 
+/** The runner's bare clone of a repository (it exists once prepareLocalJob has run for it). */
+export const localGitDir = (o: LocalCodeOptions, owner: string, repo: string): string => gitDirOf(o, repoKey(owner, repo));
+
 /** Creates the partial bare clone if missing; points an existing one at the current remote template. */
 async function ensureClone(o: LocalCodeOptions, owner: string, repo: string, signal?: AbortSignal): Promise<string> {
   const key = repoKey(owner, repo), dir = gitDirOf(o, key), url = remoteUrl(o.remoteTemplate, owner, repo);

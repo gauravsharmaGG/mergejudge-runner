@@ -7,6 +7,8 @@ import { glmKeyOf, runnerCaps } from "./capabilities.js";
 import { EngineError, JobAbort, type EngineId, type EngineOptions } from "./engine.js";
 import { resolveLocalCode, type LocalCodeOptions } from "./localcode.js";
 import type { ReviewMode } from "./deep.js";
+import type { ProofOptions } from "./proof/options.js";
+import { detectSandboxCached } from "./proof/sandbox.js";
 import { NackError, produceResult, type LeasedJob } from "./job.js";
 import type { Logger } from "./redact.js";
 import { checkCli, CODEX_API_KEY_REASON, CODEX_NOT_CHATGPT_REASON, defaultExec, type ExecFn } from "./setup.js";
@@ -47,6 +49,8 @@ export interface RunOptions {
   env?: Record<string, string | undefined>;
   /** `--deep` / `--mode` / `MERGEJUDGE_MODE`. Unset keeps `ai.mode` from the job config (default fast). */
   aiMode?: ReviewMode;
+  /** Proof tests (beta): set only when the owner turned them on. Unset = the feature does not exist for this run. */
+  proof?: ProofOptions;
   fetch?: typeof fetch;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   now?: () => number;
@@ -213,7 +217,7 @@ export async function runLoop(o: RunOptions): Promise<number> {
       }
     })();
     try {
-      const { result, calls, engine } = await produceResult(job, ctl.signal, log, { caps, options: engineOptions, blocked, local, ...(o.aiMode ? { aiMode: o.aiMode } : {}) });
+      const { result, calls, engine } = await produceResult(job, ctl.signal, log, { caps, options: engineOptions, blocked, local, ...(o.aiMode ? { aiMode: o.aiMode } : {}), ...(o.proof?.enabled ? { proof: { opts: o.proof } } : {}) });
       if (ctl.signal.aborted) { log.info("job cancelled; result discarded", { job: job.id }); return; }
       log.info("job produced result", { job: job.id, lane: result.lane, durationMs: now() - t0, engineCalls: calls, engine: engine.engine, model: engine.model ?? "default", findings: result.findings.length });
       await submit(job, result, ctl);
@@ -274,6 +278,10 @@ export async function runLoop(o: RunOptions): Promise<number> {
     }
   }
 
+  if (o.proof?.enabled) {
+    log.info("proof tests (beta) are ON: for red-lane PRs and REVIEW.md sensitive paths, up to " + o.proof.maxPerPr + " generated test(s) per PR run against the PR's base and head inside a sandbox (local-clone jobs only)", { timeoutS: Math.round(o.proof.timeoutMs / 1000) });
+    void detectSandboxCached().then((sb) => { if (!sb) log.warn("proof tests: no usable sandbox here (needs bubblewrap with unprivileged user namespaces, Linux); proof tests will be skipped and reviews are unaffected"); });
+  }
   for (const [e, why] of Object.entries(blocked)) log.warn(`engine ${e} disabled: ${why}`);
   log.info("runner starting", { runner: cfg.runnerId, concurrency, url: cfg.url, version: VERSION, engines: caps.map((c) => `${c.engine}${c.defaultModel ? `:${c.defaultModel}` : ""}(${c.billing})`).join(",") || "none" });
   if (!caps.length) log.warn("no usable engine configured (glm needs a key); every job will be nacked as unsupported");

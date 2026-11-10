@@ -68,6 +68,11 @@ describe("engine arguments", () => {
     walk(CODEX_OUTPUT_SCHEMA);
     expect(CODEX_OUTPUT_SCHEMA.required).toEqual(["summary", "files", "rubric"]);
   });
+  it("findings can carry the verbatim quote (without it no finding is line-anchored, so Codex reviews never reach proof tests)", () => {
+    const item = (CODEX_OUTPUT_SCHEMA.properties.files.items.properties.findings.items) as unknown as { required: string[]; properties: Record<string, unknown> };
+    expect(item.required).toEqual(["line", "quote", "message"]);
+    expect(Object.keys(item.properties)).toEqual(["line", "quote", "message"]);
+  });
 });
 
 describe("parseCodexLastMessage", () => {

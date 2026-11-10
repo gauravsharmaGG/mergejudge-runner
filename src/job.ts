@@ -3,8 +3,12 @@ import type { ContextPiece, ContextSource } from "../core/context.js";
 import { produceReviewResult, type ReviewResult } from "../core/review.js";
 import type { LocalJobPayload, RunnerJobPayload } from "../core/protocol.js";
 import { ENGINE_BILLING, MODEL_RE, resolveEngine, type EngineCap, type EngineName } from "../core/engines.js";
-import { afterLocalJob, LocalCodeError, prepareLocalJob, type LocalCodeOptions } from "./localcode.js";
-import { GitError } from "./git.js";
+import { afterLocalJob, LocalCodeError, localGitDir, prepareLocalJob, type LocalCodeOptions } from "./localcode.js";
+import { applyProofTests } from "./proof/index.js";
+import { sensitiveFromPolicyFiles } from "./proof/gate.js";
+import type { ProofOptions } from "./proof/options.js";
+import { detectSandboxCached, type Sandbox } from "./proof/sandbox.js";
+import { GitError, runGit } from "./git.js";
 import { applyRunnerSecretHits } from "./secretscan.js";
 import { withAiMode, type ReviewMode } from "./deep.js";
 import { EngineError, EngineProvider, type EngineId, type EngineOptions } from "./engine.js";
@@ -27,6 +31,8 @@ export interface EngineContext {
   local?: LocalCodeOptions;
   /** `--deep` / `--mode` / `MERGEJUDGE_MODE`. Unset keeps `ai.mode` on the job config. */
   aiMode?: ReviewMode;
+  /** Proof tests (beta). Absent or `enabled: false` = nothing in this file does anything differently. */
+  proof?: { opts: ProofOptions; sandbox?: () => Promise<Sandbox | null> };
 }
 
 export interface LeasedJob { id: string; repo: string; pr: number; headSha: string; baseSha: string | null; mode: string; attempt: number; payload: unknown }
@@ -117,5 +123,30 @@ export async function produceResult(
     const n = applyRunnerSecretHits(result, local.secrets.hits, { policyFiles: p.policy.used, notes: bodyNotes, approval: p.cfg.approval, laneMap: p.cfg.review.lane_map, prUrl });
     if (n) log.warn("local secret scan raised file(s) to block", { job: job.id, files: n });
   }
-  return { result, calls: provider.calls, engine: { engine: picked.engine, model: picked.model } };
+  let proofCalls = 0;
+  if (ctx.proof?.opts.enabled) {
+    // A provider of its own: a failed proof call must not poison the review's provider (`fatal`) or its call count.
+    const engineId = picked.engine as EngineId;
+    const proofProvider = new EngineProvider(engineId, signal, { ...ctx.options(engineId), model: picked.model });
+    const gitDir = local ? localGitDir(ctx.local!, p.repo.owner, p.repo.repo) : null;
+    await applyProofTests(result, {
+      opts: ctx.proof.opts,
+      llm: (req) => proofProvider.complete({ system: req.system, user: req.user, maxOutputTokens: req.maxOutputTokens, outputSchema: req.schema }),
+      sandbox: ctx.proof.sandbox ?? detectSandboxCached,
+      gitDir, baseSha: p.pr.base.sha ?? null, headSha: p.pr.head.sha,
+      pr: { title: p.pr.title, body: p.pr.body },
+      sensitive: sensitiveFromPolicyFiles(policyFiles),
+      files,
+      readFileAt: async (sha, path) => {
+        if (!gitDir) return null;
+        const r = await runGit(["--git-dir", gitDir, "show", `${sha}:${path}`], { allowFail: true, maxBytes: 1_000_000, signal });
+        return r.code === 0 ? r.stdout : null;
+      },
+      env: ctx.local?.env ?? {},
+      log: { ...log, info: (m, f) => log.info(m, { job: job.id, ...f }), warn: (m, f) => log.warn(m, { job: job.id, ...f }) },
+      signal,
+    });
+    proofCalls = proofProvider.calls;
+  }
+  return { result, calls: provider.calls + proofCalls, engine: { engine: picked.engine, model: picked.model } };
 }

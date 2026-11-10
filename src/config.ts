@@ -33,6 +33,8 @@ export interface RunnerConfig {
   tokenExpiresAt: string | null;
   /** Local code source (deep reviews from this machine's own git clone). Environment variables and `run` flags override these. */
   localCode?: { remoteUrlTemplate?: string | null; cacheMaxGb?: number | null; keepSnapshots?: number | null; maxAgeDays?: number | null; indexMaxFiles?: number | null; indexMaxMb?: number | null; indexMaxSeconds?: number | null };
+  /** Proof tests (beta, off by default). Environment variables and `run` flags override these. Owner-only: the reviewed repo's config cannot turn them on. */
+  proofTests?: { enabled?: boolean | null; maxPerPr?: number | null; timeoutSeconds?: number | null };
   /** Path of the claude binary; null = `claude` on PATH. */
   claudeBin: string | null;
   registeredAt: string;

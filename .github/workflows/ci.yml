@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         node: [20, 22]
@@ -17,5 +17,13 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: npm
+      - name: Sandbox for the proof-test tests (bubblewrap + unprivileged user namespaces)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: npm ci
       - run: npm run verify
+        env:
+          # make the real-sandbox tests fail instead of skip when bubblewrap does not work here
+          MERGEJUDGE_REQUIRE_SANDBOX: "1"
