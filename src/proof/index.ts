@@ -8,6 +8,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { escapeMd } from "../../core/render.js";
+import { estimateTokens } from "../../core/triage.js";
 import type { ReviewResult } from "../../core/review.js";
 import type { PrFile } from "../../core/types.js";
 import type { Logger } from "../redact.js";
@@ -55,6 +56,8 @@ export interface ProofSummary {
   reason?: string;
   attempted: number;
   proven: number;
+  /** Estimated tokens of the proof step's model calls (also added to the comment footer). */
+  tokens?: number;
 }
 
 interface Proven { index: number; language: Language; code: string; asserts: string }
@@ -71,9 +74,19 @@ export function renderProofSection(proven: Proven[], findings: ReviewResult["fin
     out.push(`**🧪 Proven by test** \`${f.path}${f.line ? `:${f.line}` : ""}\`: ${escapeMd(text)}`, "");
     if (!withTests) continue;
     const fence = fenceFor(p.code);
-    out.push("<details><summary>Test that passes on the base commit and fails on the head (ready to commit)</summary>", "", ...(p.asserts ? [`_${escapeMd(p.asserts)}_`, ""] : []), `${fence}${p.language === "python" ? "python" : "js"}`, p.code, fence, "", "</details>", "");
+    out.push("<details><summary>Test that passes on the base commit and fails on the head (move it into your test directory first)</summary>", "", ...(p.asserts ? [`_${escapeMd(p.asserts)}_`, ""] : []), "_Written to run from `.mj-proof/` at the repo root, so its imports are relative to that folder: move the file next to your tests and fix the import paths._", "", `${fence}${p.language === "python" ? "python" : "js"}`, p.code, fence, "", "</details>", "");
   }
   return out.join("\n");
+}
+
+/** Adds the proof step's tokens to the footer count: `~N tokens` becomes `~N+P tokens (proof P)`, next to the story share when there is one. */
+export function addProofTokens(body: string, tokens: number): string {
+  if (tokens <= 0) return body;
+  const all = [...body.matchAll(/~(\d+) tokens(?: \(story (\d+)\))?/g)];
+  const m = all[all.length - 1];
+  if (!m) return body;
+  const note = `${m[2] ? `story ${m[2]}, ` : ""}proof ${tokens}`;
+  return `${body.slice(0, m.index)}~${Number(m[1]) + tokens} tokens (${note})${body.slice(m.index! + m[0].length)}`;
 }
 
 /** Puts the section above the comment's tail (the "---" block with the footer), or at the end when there is none. */
@@ -88,6 +101,25 @@ export function insertProofSection(body: string, section: string): string {
  */
 export async function applyProofTests(result: ReviewResult, d: ProofDeps): Promise<ProofSummary> {
   if (!d.opts.enabled) return skipped("off");
+  let tokens = 0;
+  const counted: ProofDeps = {
+    ...d,
+    llm: async (req) => {
+      tokens += estimateTokens(req.system) + estimateTokens(req.user);
+      const reply = await d.llm(req);
+      tokens += estimateTokens(reply);
+      return reply;
+    },
+  };
+  try {
+    const sum = await runProof(result, counted);
+    return tokens ? { ...sum, tokens } : sum;
+  } finally {
+    if (tokens) result.body = addProofTokens(result.body, tokens);
+  }
+}
+
+async function runProof(result: ReviewResult, d: ProofDeps): Promise<ProofSummary> {
   const { log } = d;
   let tmp: string | null = null;
   try {
@@ -126,8 +158,8 @@ export async function applyProofTests(result: ReviewResult, d: ProofDeps): Promi
         const source = (await d.readFileAt(d.headSha, finding.path).catch(() => null)) ?? "";
         const tp = testPrompt({ language, intent: intent.intent, risk: intent.risk, finding, patch, source });
         const test = parseTest(await d.llm({ ...tp, schema: TEST_SCHEMA, maxOutputTokens: 4000 }));
-        if (!test) { log.info(`proof tests: ${finding.path}:${finding.line}: no usable test from the model`); continue; }
-        const verdict = await proveTest({ sandbox, language, code: test.code, baseRoot, headRoot, timeoutMs: d.opts.timeoutMs, signal });
+        if (!test) { log.info(`proof tests: ${finding.path}:${finding.line}: the model declined or returned no test`); continue; }
+        const verdict = await proveTest({ sandbox, language, target: { path: finding.path, line: finding.line! }, code: test.code, baseRoot, headRoot, timeoutMs: d.opts.timeoutMs, signal });
         log.info(`proof tests: ${finding.path}:${finding.line}: ${verdict.status} (${verdict.reason})`);
         if (verdict.status === "proven") proven.push({ index, language, code: test.code, asserts: test.asserts });
       } catch (e) {

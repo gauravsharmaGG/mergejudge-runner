@@ -10,11 +10,12 @@ import type { PrFile } from "../core/types.js";
 import type { RunnerJobPayload } from "../core/protocol.js";
 import { produceResult } from "../src/job.js";
 import { resolveLocalCode } from "../src/localcode.js";
-import { PROOF_BADGE, applyProofTests, insertProofSection, isProofBadged, type ProofDeps } from "../src/proof/index.js";
+import { PROOF_BADGE, addProofTokens, applyProofTests, insertProofSection, isProofBadged, type ProofDeps } from "../src/proof/index.js";
+import { lineCovered } from "../src/proof/exercise.js";
 import { filterTestSource, languageOf } from "../src/proof/filter.js";
 import { parseSensitivePaths, proofGate, sensitiveFromPolicyFiles } from "../src/proof/gate.js";
 import { resolveProofOptions } from "../src/proof/options.js";
-import { parseIntent, parseTest } from "../src/proof/prompts.js";
+import { clip, parseIntent, parseTest, testPrompt } from "../src/proof/prompts.js";
 import { proveTest } from "../src/proof/prove.js";
 import { classify, interpreterFor, runSandboxed, SCRATCH, type RunResult } from "../src/proof/run.js";
 import { bwrapArgs, bwrapSandbox, detectSandbox, unsandboxedForTests, type Sandbox } from "../src/proof/sandbox.js";
@@ -40,19 +41,20 @@ function makeTrees(base = BASE_CALC, head = HEAD_CALC) {
   put(headRoot, "src/calc.mjs", head);
   return { baseRoot, headRoot };
 }
+const CALC_TARGET = { path: "src/calc.mjs", line: 1 };
 const prove = (code: string, trees = makeTrees(), over: Partial<Parameters<typeof proveTest>[0]> = {}) =>
-  proveTest({ sandbox: unsandboxedForTests(), language: "javascript", code, timeoutMs: 15_000, ...trees, ...over });
+  proveTest({ sandbox: unsandboxedForTests(), language: "javascript", target: CALC_TARGET, code, timeoutMs: 15_000, ...trees, ...over });
 
 /** An origin with a base commit and a head commit that breaks `add`, as a bare clone the proof step can read. */
-function makeRepo() {
+function makeRepo(baseCalc = BASE_CALC, headCalc = HEAD_CALC) {
   const work = tmp("mjr-proof-work-");
   git(work, "init", "-q", "-b", "main");
-  put(work, "src/calc.mjs", BASE_CALC);
+  put(work, "src/calc.mjs", baseCalc);
   put(work, "src/other.mjs", "export const id = (x) => x;\n");
   put(work, "REVIEW.md", "## Sensitive paths\n- `src/**`\n");
   git(work, "add", "-A"); git(work, "commit", "-qm", "base");
   const base = git(work, "rev-parse", "HEAD");
-  put(work, "src/calc.mjs", HEAD_CALC);
+  put(work, "src/calc.mjs", headCalc);
   put(work, "src/other.mjs", "export const id = (x) => x + 0;\n");
   git(work, "add", "-A"); git(work, "commit", "-qm", "head");
   const head = git(work, "rev-parse", "HEAD");
@@ -224,14 +226,14 @@ describe("base-pass / head-fail classification (real node, real files)", () => {
   });
   it("a test the rule filter rejects never runs", async () => {
     const t = makeTrees();
-    const sandbox: Sandbox = { name: "spy", command: vi.fn(() => { throw new Error("must not run"); }) };
-    const v = await proveTest({ sandbox, language: "javascript", code: `${GOOD_TEST}\nfetch("http://x");`, timeoutMs: 1000, ...t });
+    const sandbox: Sandbox = { name: "spy", mountOf: (r) => r, command: vi.fn(() => { throw new Error("must not run"); }) };
+    const v = await proveTest({ sandbox, language: "javascript", target: CALC_TARGET, code: `${GOOD_TEST}\nfetch("http://x");`, timeoutMs: 1000, ...t });
     expect(v).toMatchObject({ status: "not-proven", reason: expect.stringContaining("network API") });
     expect(sandbox.command).not.toHaveBeenCalled();
   });
   it("never throws: a broken sandbox is just 'not proven'", async () => {
-    const sandbox: Sandbox = { name: "broken", command: () => { throw new Error("no bwrap"); } };
-    const v = await proveTest({ sandbox, language: "javascript", code: GOOD_TEST, timeoutMs: 1000, ...makeTrees() });
+    const sandbox: Sandbox = { name: "broken", mountOf: (r) => r, command: () => { throw new Error("no bwrap"); } };
+    const v = await proveTest({ sandbox, language: "javascript", target: CALC_TARGET, code: GOOD_TEST, timeoutMs: 1000, ...makeTrees() });
     expect(v).toMatchObject({ status: "not-proven", reason: expect.stringContaining("could not run") });
   });
 
@@ -242,9 +244,9 @@ describe("base-pass / head-fail classification (real node, real files)", () => {
     put(baseRoot, "calc.py", "def add(a, b):\n    return a + b\n");
     put(headRoot, "calc.py", "def add(a, b):\n    return a - b\n");
     const code = "import unittest\nfrom calc import add\n\nclass T(unittest.TestCase):\n    def test_add(self):\n        self.assertEqual(add(2, 3), 5)\n\nif __name__ == '__main__':\n    unittest.main()\n";
-    expect(await proveTest({ sandbox: unsandboxedForTests(), language: "python", code, timeoutMs: 15_000, baseRoot, headRoot })).toMatchObject({ status: "proven" });
+    expect(await proveTest({ sandbox: unsandboxedForTests(), language: "python", target: { path: "calc.py", line: 2 }, code, timeoutMs: 15_000, baseRoot, headRoot })).toMatchObject({ status: "proven" });
     put(headRoot, "calc.py", "import nonexistent_module_zzz\n");
-    expect(await proveTest({ sandbox: unsandboxedForTests(), language: "python", code, timeoutMs: 15_000, baseRoot, headRoot })).toMatchObject({ status: "not-proven" });
+    expect(await proveTest({ sandbox: unsandboxedForTests(), language: "python", target: { path: "calc.py", line: 2 }, code, timeoutMs: 15_000, baseRoot, headRoot })).toMatchObject({ status: "not-proven" });
   });
 
   it("classify: only an assertion failure counts as 'fail'", () => {
@@ -295,12 +297,15 @@ describe("applyProofTests (real git repo, real node, unsandboxed test sandbox)",
     const d = deps({ sensitive: [] });
     const r = makeResult();
     const sum = await applyProofTests(r, d);
-    expect(sum).toEqual({ ran: true, attempted: 1, proven: 1 });
+    expect(sum).toMatchObject({ ran: true, attempted: 1, proven: 1 });
+    expect(sum.tokens).toBeGreaterThan(0);
     expect(r.findings[0]!.message).toBe(`${PROOF_BADGE}add now subtracts`);
     expect(isProofBadged(r.findings[0]!.message)).toBe(true);
     expect(r.findings[1]!.message).toBe("id adds zero, harmless");
     expect(r.body).toContain("Proof tests (beta)");
-    expect(r.body).toContain("<details><summary>Test that passes on the base commit and fails on the head");
+    expect(r.body).toContain("<details><summary>Test that passes on the base commit and fails on the head (move it into your test directory first)</summary>");
+    expect(r.body).not.toMatch(/ready to commit/i);
+    expect(r.body).toContain("imports are relative to that folder");
     expect(r.body).toContain('import { add } from "../src/calc.mjs";');
     expect(r.body.indexOf("Proof tests (beta)")).toBeLessThan(r.body.indexOf("\n---\n"));
     expect(r.body).toContain("footer");
@@ -356,7 +361,7 @@ describe("fallback: a proof test that cannot run never changes or fails the revi
   it("no sandbox on this machine", async () => { expect((await unchanged((d) => { d.sandbox = async () => null; }, /no usable sandbox/)).reason).toBe("no sandbox"); });
   it("the model call throws (engine down, timeout)", async () => { await unchanged((d) => { d.llm.mockRejectedValue(new Error("engine timeout")); }, /stopped \(engine timeout\)/); });
   it("the intent answer is garbage", async () => { await unchanged((d) => { d.llm.mockResolvedValue("sorry, no JSON"); }, /intent step gave no usable answer/); });
-  it("the test reply is garbage", async () => { await unchanged((d) => { d.llm.mockImplementation(async (req: { user: string }) => (/rate every/i.test(req.user) ? INTENT_HIGH_FIRST : "nope")); }, /no usable test/); });
+  it("the test reply is garbage", async () => { await unchanged((d) => { d.llm.mockImplementation(async (req: { user: string }) => (/rate every/i.test(req.user) ? INTENT_HIGH_FIRST : "nope")); }, /declined or returned no test/); });
   it("the test fails the rule filter (network)", async () => { await unchanged((d) => { d.llm.mockImplementation(async (req: { user: string }) => (/rate every/i.test(req.user) ? INTENT_HIGH_FIRST : TEST_REPLY(`${GOOD_TEST}\nawait fetch("http://x");`))); }, /rule filter/); });
   it("the test passes on head as well", async () => {
     await unchanged((d) => { d.llm.mockImplementation(async (req: { user: string }) => (/rate every/i.test(req.user) ? INTENT_HIGH_FIRST : TEST_REPLY(GOOD_TEST.replace("add(2, 3), 5", "add(2, 3), add(2, 3)")))); }, /passes on head too/);
@@ -402,10 +407,123 @@ describe("comment size", () => {
   });
 });
 
+// ---------------------------------------------------------------- precision: a proof must be about THIS finding
+const TWO_FUNCS_BASE = ["export const add = (a, b) => a + b;", "export function isSessionValid(s) {", "  return s.expires > 100;", "}", ""].join("\n");
+const TWO_FUNCS_HEAD = ["export const add = (a, b) => a - b;", "export function isSessionValid(s) {", "  return s.expires > 100;", "}", ""].join("\n");
+const ADD_TEST = GOOD_TEST; // tests add(), which really is broken on head
+
+describe("precision: a test for a different bug in the same file is not evidence for the finding", () => {
+  it("regression: false finding on the unchanged isSessionValid line is NOT proven by a test of the real add() bug", async () => {
+    const t = makeTrees(TWO_FUNCS_BASE, TWO_FUNCS_HEAD);
+    // the false finding points at the (correct, unchanged) body line of isSessionValid
+    const v = await prove(ADD_TEST, t, { target: { path: "src/calc.mjs", line: 3 } });
+    expect(v.status).toBe("not-proven");
+    expect(v.reason).toContain("never executes src/calc.mjs:3");
+    // control: the same test IS evidence for the finding on the line that is really broken
+    expect((await prove(ADD_TEST, t, { target: { path: "src/calc.mjs", line: 1 } })).status).toBe("proven");
+  });
+  it("regression through applyProofTests: only the finding the test is about gets the badge", async () => {
+    const repo = makeRepo(TWO_FUNCS_BASE, TWO_FUNCS_HEAD);
+    const d = deps({ repo, sensitive: [] } as never);
+    d.llm.mockImplementation(async (req: { user: string }) =>
+      /rate every/i.test(req.user) ? JSON.stringify({ intent: "i", risk: "r", findings: [{ id: 0, severity: "high", testable: true }, { id: 1, severity: "high", testable: true }] }) : TEST_REPLY(ADD_TEST));
+    const r = makeResult({ findings: [{ path: "src/calc.mjs", line: 3, message: "isSessionValid compares expiry wrongly" }, { path: "src/calc.mjs", line: 1, message: "add now subtracts" }] });
+    const sum = await applyProofTests(r, d);
+    expect(sum).toMatchObject({ attempted: 2, proven: 1 });
+    expect(r.findings[0]!.message).toBe("isSessionValid compares expiry wrongly");
+    expect(r.findings[1]!.message).toBe(`${PROOF_BADGE}add now subtracts`);
+    expect(d.lines.join("\n")).toMatch(/calc\.mjs:3: not-proven \(test fails on head but never executes src\/calc\.mjs:3/);
+  });
+  it("a test that really calls the function on the finding's line is proven", async () => {
+    const head = TWO_FUNCS_BASE.replace("s.expires > 100", "s.expires < 100");
+    const test = `import test from "node:test";\nimport assert from "node:assert/strict";\nimport { isSessionValid } from "../src/calc.mjs";\ntest("a live session is valid", () => { assert.equal(isSessionValid({ expires: 500 }), true); });\n`;
+    expect((await prove(test, makeTrees(TWO_FUNCS_BASE, head), { target: { path: "src/calc.mjs", line: 3 } })).status).toBe("proven");
+  });
+  it("no coverage data at all fails closed", async () => {
+    const t = makeTrees(TWO_FUNCS_BASE, TWO_FUNCS_HEAD);
+    const sb = unsandboxedForTests();
+    const noCov: Sandbox = { ...sb, command: (spec) => sb.command({ ...spec, env: undefined }) };
+    expect((await prove(ADD_TEST, t, { sandbox: noCov })).reason).toContain("never executes");
+  });
+  it("lineCovered: declaration lines count only when the function ran; partially skipped lines do not count", () => {
+    const src = "export function f() {\n  return 1;\n}\nexport const g = () => 2;\nconst h = c ? 1 : 2;\n";
+    const at = (needle: string) => src.indexOf(needle);
+    const fRange = { startOffset: at("function"), endOffset: at("}\nexport") + 1 };
+    const gRange = { startOffset: at("() => 2"), endOffset: at("() => 2") + 7 };
+    const top = { startOffset: 0, endOffset: src.length, count: 1 };
+    const called = [top, { ...fRange, count: 1 }, { ...gRange, count: 1 }];
+    const uncalled = [top, { ...fRange, count: 0 }, { ...gRange, count: 0 }];
+    for (const line of [1, 2, 3, 4]) expect(lineCovered(src, line, called), `called line ${line}`).toBe(true);
+    for (const line of [1, 2, 4]) expect(lineCovered(src, line, uncalled), `uncalled line ${line}`).toBe(false);
+    const branch = [top, { startOffset: at("1 :"), endOffset: at("1 :") + 1, count: 0 }];
+    expect(lineCovered(src, 5, branch)).toBe(false);
+    expect(lineCovered(src, 99, called)).toBe(false);
+  });
+  it("the prompt tells the model to test only the stated finding and allows an empty test", () => {
+    const p = testPrompt({ language: "javascript", intent: "i", risk: "r", finding: { path: "a.js", line: 3, quote: "return x;", message: "m" }, patch: "", source: "" });
+    expect(p.user).toMatch(/Test nothing else/);
+    expect(p.user).toMatch(/empty string/);
+    expect(p.user).not.toMatch(/best attempt/);
+    expect(p.user).toContain("line text: return x;");
+  });
+
+  const py = (() => { try { execFileSync("python3", ["--version"]); return true; } catch { return false; } })();
+  it.skipIf(!py)("python: same regression, traced with sys.settrace; a def line needs its body to have run", async () => {
+    const root = tmp("mjr-proof-pyreg-");
+    const baseRoot = join(root, "base"), headRoot = join(root, "head");
+    const mod = (sign: string) => `def add(a, b):\n    return a ${sign} b\n\n\ndef is_session_valid(s):\n    return s > 100\n`;
+    put(baseRoot, "calc.py", mod("+"));
+    put(headRoot, "calc.py", mod("-"));
+    const code = "import unittest\nfrom calc import add\n\nclass T(unittest.TestCase):\n    def test_add(self):\n        self.assertEqual(add(2, 3), 5)\n\nif __name__ == '__main__':\n    unittest.main()\n";
+    const base = { sandbox: unsandboxedForTests(), language: "python" as const, code, timeoutMs: 15_000, baseRoot, headRoot };
+    expect((await proveTest({ ...base, target: { path: "calc.py", line: 6 } })).reason).toContain("never executes calc.py:6");
+    expect((await proveTest({ ...base, target: { path: "calc.py", line: 5 } })).reason).toContain("never executes calc.py:5"); // def line of a function that never ran
+    expect((await proveTest({ ...base, target: { path: "calc.py", line: 2 } })).status).toBe("proven");
+    expect((await proveTest({ ...base, target: { path: "calc.py", line: 1 } })).status).toBe("proven"); // def line of the function that ran
+  });
+});
+
+describe("footer tokens, description clipping", () => {
+  it("proof tokens are added to the footer count, next to the story share", () => {
+    expect(addProofTokens("x <sub>~1927 tokens · merge</sub>", 800)).toBe("x <sub>~2727 tokens (proof 800) · merge</sub>");
+    expect(addProofTokens("<sub>~1927 tokens (story 400) · m</sub>", 100)).toBe("<sub>~2027 tokens (story 400, proof 100) · m</sub>");
+    expect(addProofTokens("no footer", 5)).toBe("no footer");
+    expect(addProofTokens("<sub>~10 tokens</sub>", 0)).toBe("<sub>~10 tokens</sub>");
+  });
+  it("applyProofTests counts the intent and test calls in the footer, even when nothing is proven", async () => {
+    const d = deps({ sensitive: [] });
+    d.llm.mockImplementation(async (req: { user: string }) => (/rate every/i.test(req.user) ? INTENT_HIGH_FIRST : "nope"));
+    const r = makeResult({ body: "## MergeJudge\n\n---\n\n<sub>~1927 tokens · merge note</sub>" });
+    const sum = await applyProofTests(r, d);
+    expect(sum.proven).toBe(0);
+    expect(sum.tokens).toBeGreaterThan(100);
+    expect(r.body).toContain(`~${1927 + sum.tokens!} tokens (proof ${sum.tokens})`);
+  });
+  it("clip cuts on a sentence or word boundary with an ellipsis, never mid-word", () => {
+    const long = "The test checks that add returns the sum of both arguments for ordinary positive integers. It also checks nothing else about the module and keeps going for a while longer than allowed here.";
+    const c = clip(long, 120);
+    expect(c.length).toBeLessThanOrEqual(122);
+    expect(c.endsWith("…")).toBe(true);
+    expect(c).toBe("The test checks that add returns the sum of both arguments for ordinary positive integers. …");
+    const words = clip("alpha beta gamma delta epsilon zeta eta theta", 25);
+    expect(words).toBe("alpha beta gamma delta…");
+    expect(clip("short", 20)).toBe("short");
+    expect(parseTest(JSON.stringify({ test: "t", asserts: long.repeat(3) }))!.asserts.endsWith("…")).toBe(true);
+  });
+});
+
 // ---------------------------------------------------------------- the real sandbox (skipped where namespaces are unavailable)
 describe("bubblewrap sandbox", () => {
   let sb: Sandbox | null = null;
   beforeAll(async () => { sb = await detectSandbox(); });
+  /** Skips where bubblewrap cannot work, unless the environment says it must (CI sets MERGEJUDGE_REQUIRE_SANDBOX=1). */
+  const needSandbox = (ctx: { skip: () => void }): Sandbox | null => {
+    if (sb) return sb;
+    if (process.env.MERGEJUDGE_REQUIRE_SANDBOX) throw new Error("MERGEJUDGE_REQUIRE_SANDBOX is set but no working bubblewrap sandbox was found");
+    ctx.skip();
+    return null;
+  };
+  it("a working sandbox exists where one is required", (ctx) => { needSandbox(ctx); });
 
   it("detectSandbox is null off Linux and when the probe fails", async () => {
     expect(await detectSandbox({ platform: "darwin" })).toBeNull();
@@ -422,7 +540,8 @@ describe("bubblewrap sandbox", () => {
   });
 
   it("the whole proof works inside the sandbox; the test cannot reach the network or write outside", async (ctx) => {
-    if (!sb) return ctx.skip();
+    const sb = needSandbox(ctx);
+    if (!sb) return;
     const hits: string[] = [];
     const server = createServer((s) => { hits.push("connect"); s.end(); });
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -452,13 +571,31 @@ describe("bubblewrap sandbox", () => {
   }, 60_000);
 
   it("a test in the sandbox cannot read the runner's home directory", async (ctx) => {
-    if (!sb) return ctx.skip();
+    const sb = needSandbox(ctx);
+    if (!sb) return;
     const home = process.env.HOME!;
     const t = makeTrees();
     put(t.headRoot, `${SCRATCH}/probe.mjs`, `import fs from "node:fs"; console.log("HOME_VISIBLE=" + fs.existsSync(${JSON.stringify(home)} + "/.config"));\n`);
     const r = await runSandboxed(sb, t.headRoot, { bin: process.execPath, args: [`${SCRATCH}/probe.mjs`], file: "x" }, { timeoutMs: 10_000 });
     expect(r.output).toContain("HOME_VISIBLE=false");
   }, 30_000);
+
+  it("coverage and tracing work inside the sandbox: the precision check holds there too (js and python)", async (ctx) => {
+    const sb = needSandbox(ctx);
+    if (!sb) return;
+    const t = makeTrees(TWO_FUNCS_BASE, TWO_FUNCS_HEAD);
+    expect((await prove(ADD_TEST, t, { sandbox: sb, target: { path: "src/calc.mjs", line: 3 } })).reason).toContain("never executes");
+    expect((await prove(ADD_TEST, t, { sandbox: sb, target: { path: "src/calc.mjs", line: 1 } })).status).toBe("proven");
+    try { execFileSync("python3", ["--version"]); } catch { return; }
+    const root = tmp("mjr-proof-pybw-");
+    const baseRoot = join(root, "base"), headRoot = join(root, "head");
+    const mod = (sign: string) => `def add(a, b):\n    return a ${sign} b\n\n\ndef other(s):\n    return s > 100\n`;
+    put(baseRoot, "calc.py", mod("+")); put(headRoot, "calc.py", mod("-"));
+    const code = "import unittest\nfrom calc import add\n\nclass T(unittest.TestCase):\n    def test_add(self):\n        self.assertEqual(add(2, 3), 5)\n\nif __name__ == '__main__':\n    unittest.main()\n";
+    const base = { sandbox: sb, language: "python" as const, code, timeoutMs: 20_000, baseRoot, headRoot };
+    expect((await proveTest({ ...base, target: { path: "calc.py", line: 6 } })).reason).toContain("never executes");
+    expect((await proveTest({ ...base, target: { path: "calc.py", line: 2 } })).status).toBe("proven");
+  }, 90_000);
 
   it("the interpreter for javascript is the runner's own node", () => {
     expect(interpreterFor("javascript")?.bin).toBe(process.execPath);

@@ -5,6 +5,7 @@ import { join, relative } from "node:path";
 import { GitSource, LOCAL_LIMITS } from "../localcode.js";
 import { runGit } from "../git.js";
 import type { Language } from "./filter.js";
+import { PY_TRACE_HARNESS, TRACE_HARNESS_FILE } from "./exercise.js";
 import { findOnPath, type Sandbox } from "./sandbox.js";
 
 export const SCRATCH = ".mj-proof";
@@ -32,23 +33,25 @@ export async function exportTree(gitDir: string, sha: string, dest: string, env:
 export interface Interpreter { bin: string; args: string[]; file: string }
 
 /** The interpreter and the test file name for a language, or null when it is not installed. Node always uses the runner's own binary. */
-export function interpreterFor(language: Language, pathVar?: string): Interpreter | null {
+export function interpreterFor(language: Language, pathVar?: string, traced = false): Interpreter | null {
   if (language === "javascript") return { bin: process.execPath, args: ["--test", `${SCRATCH}/proof.test.mjs`], file: "proof.test.mjs" };
   const py = findOnPath("python3", pathVar);
-  return py ? { bin: py, args: [`${SCRATCH}/proof_test.py`], file: "proof_test.py" } : null;
+  if (!py) return null;
+  return { bin: py, args: traced ? [`${SCRATCH}/${TRACE_HARNESS_FILE}`, `${SCRATCH}/proof_test.py`] : [`${SCRATCH}/proof_test.py`], file: "proof_test.py" };
 }
 
 export function writeTest(root: string, file: string, code: string): void {
   const dir = join(root, SCRATCH);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, file), code);
+  if (file.endsWith(".py")) writeFileSync(join(dir, TRACE_HARNESS_FILE), PY_TRACE_HARNESS);
 }
 
 export type RunStatus = "exit" | "timeout" | "spawn-error" | "aborted";
 export interface RunResult { status: RunStatus; code: number | null; output: string }
 
-export function runSandboxed(sb: Sandbox, root: string, itp: Interpreter, o: { timeoutMs: number; signal?: AbortSignal }): Promise<RunResult> {
-  const c = sb.command({ root, scratch: join(root, SCRATCH), bin: itp.bin, args: itp.args });
+export function runSandboxed(sb: Sandbox, root: string, itp: Interpreter, o: { timeoutMs: number; signal?: AbortSignal; env?: Record<string, string> }): Promise<RunResult> {
+  const c = sb.command({ root, scratch: join(root, SCRATCH), bin: itp.bin, args: itp.args, ...(o.env ? { env: o.env } : {}) });
   return new Promise((resolve) => {
     if (o.signal?.aborted) return resolve({ status: "aborted", code: null, output: "" });
     let out = "";

@@ -15,6 +15,8 @@ export interface SandboxSpec {
   /** Absolute path of the interpreter. */
   bin: string;
   args: string[];
+  /** Extra environment for the test process. `$SCRATCH` in a value stands for the scratch directory as the test sees it. */
+  env?: Record<string, string>;
 }
 
 export interface SandboxCommand { cmd: string; args: string[]; env: Record<string, string>; cwd: string }
@@ -22,7 +24,12 @@ export interface SandboxCommand { cmd: string; args: string[]; env: Record<strin
 export interface Sandbox {
   name: string;
   command(spec: SandboxSpec): SandboxCommand;
+  /** Where `root` is seen from inside the sandbox (coverage URLs and trace paths use it). */
+  mountOf(root: string): string;
 }
+
+const withScratch = (env: Record<string, string> | undefined, scratch: string): [string, string][] =>
+  Object.entries(env ?? {}).map(([k, v]) => [k, v.replaceAll("$SCRATCH", scratch)]);
 
 const SYSTEM_DIRS = ["/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/etc"];
 const underSystem = (p: string) => SYSTEM_DIRS.some((d) => p === d || p.startsWith(`${d}/`));
@@ -52,11 +59,12 @@ export function bwrapArgs(spec: SandboxSpec): string[] {
 export function bwrapSandbox(bwrapBin = "bwrap"): Sandbox {
   return {
     name: "bubblewrap",
+    mountOf: () => "/work",
     command(spec) {
       const path = [dirname(spec.bin), "/usr/local/bin", "/usr/bin", "/bin"].join(delimiter);
       return {
         cmd: bwrapBin,
-        args: [...bwrapArgs(spec), "--chdir", "/work", "--clearenv", "--setenv", "PATH", path, "--setenv", "HOME", "/tmp", "--setenv", "TMPDIR", "/tmp", "--setenv", "LANG", "C", "--setenv", "PYTHONPATH", "/work", "--setenv", "PYTHONDONTWRITEBYTECODE", "1", "--", spec.bin, ...spec.args],
+        args: [...bwrapArgs(spec), "--chdir", "/work", "--clearenv", "--setenv", "PATH", path, "--setenv", "HOME", "/tmp", "--setenv", "TMPDIR", "/tmp", "--setenv", "LANG", "C", "--setenv", "PYTHONPATH", "/work", "--setenv", "PYTHONDONTWRITEBYTECODE", "1", ...withScratch(spec.env, "/work/.mj-proof").flatMap(([k, v]) => ["--setenv", k, v]), "--", spec.bin, ...spec.args],
         env: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
         cwd: "/",
       };
@@ -71,8 +79,9 @@ export function bwrapSandbox(bwrapBin = "bwrap"): Sandbox {
 export function unsandboxedForTests(): Sandbox {
   return {
     name: "none (tests only)",
+    mountOf: (root) => root,
     command(spec) {
-      return { cmd: spec.bin, args: spec.args, env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: spec.scratch, TMPDIR: spec.scratch, PYTHONPATH: spec.root, PYTHONDONTWRITEBYTECODE: "1", LANG: "C" }, cwd: spec.root };
+      return { cmd: spec.bin, args: spec.args, env: { ...Object.fromEntries(withScratch(spec.env, spec.scratch)), PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: spec.scratch, TMPDIR: spec.scratch, PYTHONPATH: spec.root, PYTHONDONTWRITEBYTECODE: "1", LANG: "C" }, cwd: spec.root };
     },
   };
 }
