@@ -6,7 +6,7 @@ Release notes for `mergejudge-runner`. Versions below match `package.json`, `src
 
 ## Unreleased
 
-Nothing yet.
+- **Results pinned to the reviewed commit.** The runner re-reads the PR head before posting; if a push moved it (or the PR closed) during the review, only a neutral `Stale: reviewed abc1234, head is now def5678` check goes on the old commit and nothing else is applied. Approvals are sent with `commit_id` and auto-merge with `expectedHeadOid` of the reviewed commit. The sticky comment and check summary now name the reviewed commit.
 
 ## 0.8.0
 
