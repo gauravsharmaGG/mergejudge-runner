@@ -466,7 +466,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
   const body = renderComment({
     agg, headSha: pr.head.sha, mode: llm && provider ? provider.label : "rules-only", tokensEstimate: tokens, ...(storyTokens ? { storyTokens } : {}), notes,
     policyFiles: policies.used, fileFindings: findings.filter((f) => f.line === undefined),
-    breakdown: breakdown ?? undefined, approval: cfg.approval, laneMap: cfg.review.lane_map, prUrl: pr.html_url,
+    breakdown: breakdown ?? undefined, approval: cfg.approval, laneGate: cfg.lane_gate, laneMap: cfg.review.lane_map, prUrl: pr.html_url,
     story, storyImageUrl, storyStyle: cfg.comment.flow_chart_style, storyAnimate: cfg.comment.flow_chart_animate,
     ...(whereItSits ? { whereItSits } : {}),
     lineFindings: lineFindingsOf(findings),
@@ -531,7 +531,9 @@ export async function postReviewResult(r: ReviewResult, c: PostContext): Promise
   const body = c.owner ? withSummaryMarker(r.body, c.owner.marker) : r.body;
   await upsertStickyComment(ok, repo, r.prNumber, body, c.owner);
   try {
-    await createCheckRun(ok, repo, r.headSha, r.agg);
+    // The learning-branch block is a safety rule for MergeJudge's own data branch: it fails the check whatever `lane_gate` says.
+    const gate = r.kind === "learning-block" ? "enforce" : cfg.lane_gate;
+    await createCheckRun(ok, repo, r.headSha, r.agg, gate);
   } catch (e) {
     // A refusal (403 read-only token on fork PRs or no `checks: write`, 404/422 unknown commit) is permanent and must not
     // fail the whole review: the lane goes into the sticky comment instead. Anything else (5xx, network) still throws, so
@@ -567,7 +569,9 @@ export async function postReviewResult(r: ReviewResult, c: PostContext): Promise
       log.warning(`Could not post inline findings: ${(e as Error).message}`);
     }
   }
-  await applyApproval(
+  if (cfg.lane_gate !== "enforce") {
+    log.info(`lane_gate ${cfg.lane_gate}: approval and auto-merge skipped`);
+  } else await applyApproval(
     cfg.approval, r.lane,
     {
       enableAutoMerge: (m) => enableAutoMerge(ok, r.prNodeId, m, r.headSha),

@@ -85,7 +85,7 @@ describe("head pin", () => {
   });
 
   it("check summary and createCheckRun include the sha", async () => {
-    expect(checkSummary(agg, OLD).summary).toContain("Reviewed commit aaaaaaa");
+    expect(checkSummary(agg, "enforce", OLD).summary).toContain("Reviewed commit aaaaaaa");
     const create = vi.fn(async () => ({}));
     await createCheckRun({ rest: { checks: { create } } } as never, { owner: "o", repo: "r" }, OLD, agg);
     expect((create.mock.calls[0] as unknown as [{ output: { summary: string } }])[0].output.summary).toContain("aaaaaaa");

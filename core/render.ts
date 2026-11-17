@@ -4,6 +4,7 @@ import { renderFeedback } from "./feedback.js";
 import { renderLaneMap } from "./lanemap.js";
 import { renderWhereItSits, type WhereItSits } from "./whereitsits.js";
 import { renderStorySection, type Story } from "./story.js";
+import type { LaneGate } from "./config.js";
 import type { RubricResult } from "./rubrics.js";
 import { LANE_ORDER, type FileVerdict, type Lane } from "./types.js";
 
@@ -60,6 +61,8 @@ export function capBody(head: string, tail: string, max = MAX_COMMENT_CHARS): st
 
 export interface RenderInput {
   agg: Aggregate;
+  /** The repo's `lane_gate` (default enforce); observe and off change the note under the lane line. */
+  laneGate?: LaneGate;
   mode: string; // "rules-only" or model name
   tokensEstimate: number;
   /** Commit the review is of: shown as "Reviewed commit" in the footer and kept in a hidden marker. */
@@ -232,7 +235,7 @@ export function mergeNote(approval?: { enabled?: boolean; mode?: string } | null
 
 const isOpen = (x: RubricResult) => x.verdict === "fail" || x.verdict === "unverified";
 
-function outcomeLines(agg: Aggregate, flagged: number, problems: number, lineComments: number): string[] {
+function outcomeLines(agg: Aggregate, flagged: number, problems: number, lineComments: number, gate: LaneGate = "enforce"): string[] {
   const total = agg.files.length;
   const parts = [`**Overall lane:** ${EMOJI[agg.lane]} \`${agg.lane}\``];
   if (agg.lane === "auto") parts.push(total ? `all ${plural(total, "file")} look${total === 1 ? "s" : ""} safe to auto-merge` : "no files to review");
@@ -242,7 +245,9 @@ function outcomeLines(agg: Aggregate, flagged: number, problems: number, lineCom
   if (lineComments) parts.push(plural(lineComments, "line comment"));
   // Italic, not a blockquote or plain line: learnflow takes the first plain line as the PR summary.
   const advisory =
-    agg.lane === "review" ? [`*\`review\` is advisory: the \`${CHECK_NAME}\` check stays neutral; only \`block\` fails it.*`]
+    gate === "observe" ? [`*Observe mode (\`lane_gate: observe\`): the \`${CHECK_NAME}\` check never fails; this PR would have been \`${agg.lane}\`.*`]
+    : gate === "off" ? ["*Lane gate off (`lane_gate: off`): the check always passes.*"]
+    : agg.lane === "review" ? [`*\`review\` is advisory: the \`${CHECK_NAME}\` check stays neutral; only \`block\` fails it.*`]
     : agg.lane === "block" ? [`*\`block\` fails the \`${CHECK_NAME}\` check.*`]
     : [];
   return [parts.join(" · "), "", ...advisory, ...(advisory.length ? [""] : [])];
@@ -389,7 +394,7 @@ export function renderComment(r: RenderInput): string {
   const rubricOpen = rubric.filter(isOpen);
   const problems = rubricOpen.length + (r.fileFindings?.length ?? 0);
   const out: string[] = [MARKER, "## ⚖️ MergeJudge", ""];
-  out.push(...outcomeLines(agg, flagged.length, problems, r.lineFindings?.length ?? 0));
+  out.push(...outcomeLines(agg, flagged.length, problems, r.lineFindings?.length ?? 0, r.laneGate));
   out.push(escapeMd(agg.summary), "");
   const checks = whatToCheck(r, rubricOpen);
   const rest = [...whyThisLane(r, flagged), ...filesSection(r, flagged, safe), ...allChecks(rubric)];
@@ -431,6 +436,13 @@ export const CHECK_CONCLUSION: Record<Lane, "success" | "neutral" | "failure"> =
   block: "failure",
 };
 
+/** Check conclusion for a lane under `lane_gate`: enforce = CHECK_CONCLUSION; observe never fails; off always passes. */
+export function checkConclusion(lane: Lane, mode: LaneGate = "enforce"): "success" | "neutral" | "failure" {
+  if (mode === "off") return "success";
+  if (mode === "observe") return lane === "auto" ? "success" : "neutral";
+  return CHECK_CONCLUSION[lane];
+}
+
 const HEAD_MARKER_RE = /<!-- mergejudge:head:([0-9a-f]{40}) -->/;
 export function renderHeadMarker(sha: string): string { return `<!-- mergejudge:head:${sha} -->`; }
 /** The full commit SHA a sticky comment says it reviewed, or null. */
@@ -438,10 +450,15 @@ export function parseReviewedHead(body: string | null | undefined): string | nul
   return HEAD_MARKER_RE.exec(body ?? "")?.[1] ?? null;
 }
 
-export function checkSummary(agg: Aggregate, headSha?: string): { title: string; summary: string } {
+export function checkSummary(agg: Aggregate, mode: LaneGate = "enforce", headSha?: string): { title: string; summary: string } {
   const n = (l: Lane) => agg.files.filter((f) => f.lane === l).length;
+  const counts = `${EMOJI[agg.lane]} Overall lane **${agg.lane}** — ${n("auto")} auto, ${n("review")} review, ${n("block")} block file(s).${headSha ? ` Reviewed commit ${headSha.slice(0, 7)}.` : ""}`;
+  const note =
+    mode === "observe" ? `Observe mode (\`lane_gate: observe\`): this check never fails; the lane would have been \`${agg.lane}\`.\n\n`
+    : mode === "off" ? "Lane gate off (`lane_gate: off`): this check always passes.\n\n"
+    : "";
   return {
-    title: `Lane: ${agg.lane}`,
-    summary: capBody(renderLaneExplanation(agg), `\n\n${EMOJI[agg.lane]} Overall lane **${agg.lane}** — ${n("auto")} auto, ${n("review")} review, ${n("block")} block file(s).${headSha ? ` Reviewed commit ${headSha.slice(0, 7)}.` : ""}`),
+    title: mode === "off" ? `Lane gate off (lane: ${agg.lane})` : mode === "observe" && agg.lane !== "auto" ? `Observe: would ${agg.lane === "block" ? "block" : "review"}` : `Lane: ${agg.lane}`,
+    summary: capBody(note + renderLaneExplanation(agg), `\n\n${counts}`),
   };
 }

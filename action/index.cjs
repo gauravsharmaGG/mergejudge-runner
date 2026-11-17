@@ -53982,8 +53982,10 @@ var shepherdSchema = external_exports.object({
   /** Tier 1: inline review comments carry "suggested changes" while Shepherd is on for the PR. */
   suggestions: external_exports.boolean().default(true)
 }).default(DEFAULT_SHEPHERD);
+var LANE_GATES = ["off", "observe", "enforce"];
 var configSchema = external_exports.object({
   provider: providerSchema,
+  lane_gate: external_exports.enum(LANE_GATES).default("enforce"),
   lanes: external_exports.object({
     auto: external_exports.array(external_exports.string()).default(DEFAULT_AUTO),
     protected: external_exports.array(external_exports.string()).default(DEFAULT_PROTECTED),
@@ -55332,7 +55334,7 @@ function mergeNote(approval) {
   return approval?.enabled === true && approval.mode === "auto-merge-only" ? `${MERGE_NOTE} ${AUTO_MERGE_NOTE}` : MERGE_NOTE;
 }
 var isOpen = (x) => x.verdict === "fail" || x.verdict === "unverified";
-function outcomeLines(agg, flagged, problems, lineComments) {
+function outcomeLines(agg, flagged, problems, lineComments, gate = "enforce") {
   const total = agg.files.length;
   const parts = [`**Overall lane:** ${EMOJI[agg.lane]} \`${agg.lane}\``];
   if (agg.lane === "auto") parts.push(total ? `all ${plural2(total, "file")} look${total === 1 ? "s" : ""} safe to auto-merge` : "no files to review");
@@ -55340,7 +55342,7 @@ function outcomeLines(agg, flagged, problems, lineComments) {
   else parts.push("held by PR labels or PR-level checks");
   if (problems) parts.push(`${plural2(problems, "problem")} found`);
   if (lineComments) parts.push(plural2(lineComments, "line comment"));
-  const advisory = agg.lane === "review" ? [`*\`review\` is advisory: the \`${CHECK_NAME}\` check stays neutral; only \`block\` fails it.*`] : agg.lane === "block" ? [`*\`block\` fails the \`${CHECK_NAME}\` check.*`] : [];
+  const advisory = gate === "observe" ? [`*Observe mode (\`lane_gate: observe\`): the \`${CHECK_NAME}\` check never fails; this PR would have been \`${agg.lane}\`.*`] : gate === "off" ? ["*Lane gate off (`lane_gate: off`): the check always passes.*"] : agg.lane === "review" ? [`*\`review\` is advisory: the \`${CHECK_NAME}\` check stays neutral; only \`block\` fails it.*`] : agg.lane === "block" ? [`*\`block\` fails the \`${CHECK_NAME}\` check.*`] : [];
   return [parts.join(" \xB7 "), "", ...advisory, ...advisory.length ? [""] : []];
 }
 function whatToCheck(r, rubricOpen) {
@@ -55472,7 +55474,7 @@ function renderComment(r) {
   const rubricOpen = rubric.filter(isOpen);
   const problems = rubricOpen.length + (r.fileFindings?.length ?? 0);
   const out = [MARKER, "## \u2696\uFE0F MergeJudge", ""];
-  out.push(...outcomeLines(agg, flagged.length, problems, r.lineFindings?.length ?? 0));
+  out.push(...outcomeLines(agg, flagged.length, problems, r.lineFindings?.length ?? 0, r.laneGate));
   out.push(escapeMd(agg.summary), "");
   const checks = whatToCheck(r, rubricOpen);
   const rest = [...whyThisLane(r, flagged), ...filesSection(r, flagged, safe), ...allChecks(rubric)];
@@ -55505,16 +55507,25 @@ var CHECK_CONCLUSION = {
   review: "neutral",
   block: "failure"
 };
+function checkConclusion(lane, mode = "enforce") {
+  if (mode === "off") return "success";
+  if (mode === "observe") return lane === "auto" ? "success" : "neutral";
+  return CHECK_CONCLUSION[lane];
+}
 function renderHeadMarker(sha) {
   return `<!-- mergejudge:head:${sha} -->`;
 }
-function checkSummary(agg, headSha2) {
+function checkSummary(agg, mode = "enforce", headSha2) {
   const n = (l) => agg.files.filter((f) => f.lane === l).length;
-  return {
-    title: `Lane: ${agg.lane}`,
-    summary: capBody(renderLaneExplanation(agg), `
+  const counts = `${EMOJI[agg.lane]} Overall lane **${agg.lane}** \u2014 ${n("auto")} auto, ${n("review")} review, ${n("block")} block file(s).${headSha2 ? ` Reviewed commit ${headSha2.slice(0, 7)}.` : ""}`;
+  const note2 = mode === "observe" ? `Observe mode (\`lane_gate: observe\`): this check never fails; the lane would have been \`${agg.lane}\`.
 
-${EMOJI[agg.lane]} Overall lane **${agg.lane}** \u2014 ${n("auto")} auto, ${n("review")} review, ${n("block")} block file(s).${headSha2 ? ` Reviewed commit ${headSha2.slice(0, 7)}.` : ""}`)
+` : mode === "off" ? "Lane gate off (`lane_gate: off`): this check always passes.\n\n" : "";
+  return {
+    title: mode === "off" ? `Lane gate off (lane: ${agg.lane})` : mode === "observe" && agg.lane !== "auto" ? `Observe: would ${agg.lane === "block" ? "block" : "review"}` : `Lane: ${agg.lane}`,
+    summary: capBody(note2 + renderLaneExplanation(agg), `
+
+${counts}`)
   };
 }
 
@@ -55773,14 +55784,14 @@ async function upsertStickyComment(ok, r, pull, body, owner) {
   if (existing) await ok.rest.issues.updateComment({ ...r, comment_id: existing.id, body });
   else await ok.rest.issues.createComment({ ...r, issue_number: pull, body });
 }
-async function createCheckRun(ok, r, headSha2, agg) {
-  const { title, summary: summary2 } = checkSummary(agg, headSha2);
+async function createCheckRun(ok, r, headSha2, agg, mode = "enforce") {
+  const { title, summary: summary2 } = checkSummary(agg, mode, headSha2);
   await ok.rest.checks.create({
     ...r,
     name: CHECK_NAME,
     head_sha: headSha2,
     status: "completed",
-    conclusion: CHECK_CONCLUSION[agg.lane],
+    conclusion: checkConclusion(agg.lane, mode),
     output: { title, summary: summary2 }
   });
 }
@@ -60520,6 +60531,7 @@ async function produceReviewResult(o) {
     fileFindings: findings.filter((f) => f.line === void 0),
     breakdown: breakdown ?? void 0,
     approval: cfg.approval,
+    laneGate: cfg.lane_gate,
     laneMap: cfg.review.lane_map,
     prUrl: pr.html_url,
     story,
@@ -60588,7 +60600,8 @@ async function postReviewResult(r, c) {
   const body = c.owner ? withSummaryMarker(r.body, c.owner.marker) : r.body;
   await upsertStickyComment(ok, repo, r.prNumber, body, c.owner);
   try {
-    await createCheckRun(ok, repo, r.headSha, r.agg);
+    const gate = r.kind === "learning-block" ? "enforce" : cfg.lane_gate;
+    await createCheckRun(ok, repo, r.headSha, r.agg, gate);
   } catch (e) {
     const status = e.status;
     if (status !== 403 && status !== 404 && status !== 422) throw e;
@@ -60627,7 +60640,9 @@ ${checkFallbackNote(r.lane, status)}`, c.owner);
       log.warning(`Could not post inline findings: ${e.message}`);
     }
   }
-  await applyApproval(
+  if (cfg.lane_gate !== "enforce") {
+    log.info(`lane_gate ${cfg.lane_gate}: approval and auto-merge skipped`);
+  } else await applyApproval(
     cfg.approval,
     r.lane,
     {

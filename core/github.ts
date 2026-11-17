@@ -1,6 +1,7 @@
 import type * as github from "@actions/github";
 import type { PrFile } from "./types.js";
-import { CHECK_CONCLUSION, CHECK_NAME, MARKER, checkSummary } from "./render.js";
+import { CHECK_NAME, MARKER, checkConclusion, checkSummary } from "./render.js";
+import type { LaneGate } from "./config.js";
 import type { Aggregate } from "./aggregate.js";
 import { parseMarker, planInline, type InlinePlan } from "./inline.js";
 import type { FindingThread } from "./answers.js";
@@ -80,14 +81,14 @@ export async function upsertStickyComment(ok: Octokit, r: Repo, pull: number, bo
   else await ok.rest.issues.createComment({ ...r, issue_number: pull, body });
 }
 
-export async function createCheckRun(ok: Octokit, r: Repo, headSha: string, agg: Aggregate): Promise<void> {
-  const { title, summary } = checkSummary(agg, headSha);
+export async function createCheckRun(ok: Octokit, r: Repo, headSha: string, agg: Aggregate, mode: LaneGate = "enforce"): Promise<void> {
+  const { title, summary } = checkSummary(agg, mode, headSha);
   await ok.rest.checks.create({
     ...r,
     name: CHECK_NAME,
     head_sha: headSha,
     status: "completed",
-    conclusion: CHECK_CONCLUSION[agg.lane],
+    conclusion: checkConclusion(agg.lane, mode),
     output: { title, summary },
   });
 }
