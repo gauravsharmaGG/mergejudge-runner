@@ -6,7 +6,7 @@ Release notes for `mergejudge-runner`. Versions below match `package.json`, `src
 
 ## Unreleased
 
-Nothing yet.
+- **`lane_gate: off | observe | enforce`** (default `enforce`, unchanged behaviour). `observe` never fails the `mergejudge/lane` check (`block` and `review` are `neutral`, titled "Observe: would block") and skips bot approvals and auto-merge, so MergeJudge can be tried on a repo first. `off` always passes the check and skips approvals; comments and findings still post. The learning-branch block always fails the check. The sticky comment note follows the mode.
 
 ## 0.8.0
 
