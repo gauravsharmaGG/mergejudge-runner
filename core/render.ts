@@ -65,6 +65,8 @@ export interface RenderInput {
   laneGate?: LaneGate;
   mode: string; // "rules-only" or model name
   tokensEstimate: number;
+  /** Commit the review is of: shown as "Reviewed commit" in the footer and kept in a hidden marker. */
+  headSha?: string;
   /** Tokens of the separate PR story call; shown in the footer as `(story N)` and added to the total. Not part of the review estimate. */
   storyTokens?: number;
   notes: string[];
@@ -406,6 +408,7 @@ export function renderComment(r: RenderInput): string {
   tail.push(
     `<sub>${r.mode === "rules-only" ? "rules-only · " : ""}~${r.tokensEstimate + (r.storyTokens ?? 0)} tokens${r.storyTokens ? ` (story ${r.storyTokens})` : ""} · ${mergeNote(r.approval)} · To make <code>block</code> stop merges, require <code>${CHECK_NAME}</code> in branch protection.</sub>`,
     "",
+    ...(r.headSha ? [`<sub>Reviewed commit <code>${r.headSha.slice(0, 7)}</code></sub>`, "", renderHeadMarker(r.headSha), ""] : []),
     "<details><summary><sub>Run details</sub></summary>",
     "",
     `<sub>Mode: ${escapeMd(r.mode)}` +
@@ -440,9 +443,16 @@ export function checkConclusion(lane: Lane, mode: LaneGate = "enforce"): "succes
   return CHECK_CONCLUSION[lane];
 }
 
-export function checkSummary(agg: Aggregate, mode: LaneGate = "enforce"): { title: string; summary: string } {
+const HEAD_MARKER_RE = /<!-- mergejudge:head:([0-9a-f]{40}) -->/;
+export function renderHeadMarker(sha: string): string { return `<!-- mergejudge:head:${sha} -->`; }
+/** The full commit SHA a sticky comment says it reviewed, or null. */
+export function parseReviewedHead(body: string | null | undefined): string | null {
+  return HEAD_MARKER_RE.exec(body ?? "")?.[1] ?? null;
+}
+
+export function checkSummary(agg: Aggregate, mode: LaneGate = "enforce", headSha?: string): { title: string; summary: string } {
   const n = (l: Lane) => agg.files.filter((f) => f.lane === l).length;
-  const counts = `${EMOJI[agg.lane]} Overall lane **${agg.lane}** — ${n("auto")} auto, ${n("review")} review, ${n("block")} block file(s).`;
+  const counts = `${EMOJI[agg.lane]} Overall lane **${agg.lane}** — ${n("auto")} auto, ${n("review")} review, ${n("block")} block file(s).${headSha ? ` Reviewed commit ${headSha.slice(0, 7)}.` : ""}`;
   const note =
     mode === "observe" ? `Observe mode (\`lane_gate: observe\`): this check never fails; the lane would have been \`${agg.lane}\`.\n\n`
     : mode === "off" ? "Lane gate off (`lane_gate: off`): this check always passes.\n\n"

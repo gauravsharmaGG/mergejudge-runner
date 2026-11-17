@@ -55487,6 +55487,7 @@ function renderComment(r) {
   tail.push(
     `<sub>${r.mode === "rules-only" ? "rules-only \xB7 " : ""}~${r.tokensEstimate + (r.storyTokens ?? 0)} tokens${r.storyTokens ? ` (story ${r.storyTokens})` : ""} \xB7 ${mergeNote(r.approval)} \xB7 To make <code>block</code> stop merges, require <code>${CHECK_NAME}</code> in branch protection.</sub>`,
     "",
+    ...r.headSha ? [`<sub>Reviewed commit <code>${r.headSha.slice(0, 7)}</code></sub>`, "", renderHeadMarker(r.headSha), ""] : [],
     "<details><summary><sub>Run details</sub></summary>",
     "",
     `<sub>Mode: ${escapeMd(r.mode)}` + (r.policyFiles?.length ? ` \xB7 Policy: ${r.policyFiles.map((p) => escapeMd(p.path) + (p.truncated ? " (truncated)" : "")).join(", ")}` : "") + (r.breakdown ? ` \xB7 tokens system ${r.breakdown.system}/policy ${r.breakdown.policy}/rubric ${r.breakdown.rubric}/diff ${r.breakdown.diff}${r.breakdown.context ? `/context ${r.breakdown.context}` : ""}${r.breakdown.tools ? `/tools ${r.breakdown.tools} (${r.breakdown.tool_calls ?? 0} calls)` : ""}${r.breakdown.second_pass ? `/second ${r.breakdown.second_pass}` : ""}/out ${r.breakdown.output}` : "") + "</sub>",
@@ -55511,9 +55512,12 @@ function checkConclusion(lane, mode = "enforce") {
   if (mode === "observe") return lane === "auto" ? "success" : "neutral";
   return CHECK_CONCLUSION[lane];
 }
-function checkSummary(agg, mode = "enforce") {
+function renderHeadMarker(sha) {
+  return `<!-- mergejudge:head:${sha} -->`;
+}
+function checkSummary(agg, mode = "enforce", headSha2) {
   const n = (l) => agg.files.filter((f) => f.lane === l).length;
-  const counts = `${EMOJI[agg.lane]} Overall lane **${agg.lane}** \u2014 ${n("auto")} auto, ${n("review")} review, ${n("block")} block file(s).`;
+  const counts = `${EMOJI[agg.lane]} Overall lane **${agg.lane}** \u2014 ${n("auto")} auto, ${n("review")} review, ${n("block")} block file(s).${headSha2 ? ` Reviewed commit ${headSha2.slice(0, 7)}.` : ""}`;
   const note2 = mode === "observe" ? `Observe mode (\`lane_gate: observe\`): this check never fails; the lane would have been \`${agg.lane}\`.
 
 ` : mode === "off" ? "Lane gate off (`lane_gate: off`): this check always passes.\n\n" : "";
@@ -55781,7 +55785,7 @@ async function upsertStickyComment(ok, r, pull, body, owner) {
   else await ok.rest.issues.createComment({ ...r, issue_number: pull, body });
 }
 async function createCheckRun(ok, r, headSha2, agg, mode = "enforce") {
-  const { title, summary: summary2 } = checkSummary(agg, mode);
+  const { title, summary: summary2 } = checkSummary(agg, mode, headSha2);
   await ok.rest.checks.create({
     ...r,
     name: CHECK_NAME,
@@ -55791,18 +55795,32 @@ async function createCheckRun(ok, r, headSha2, agg, mode = "enforce") {
     output: { title, summary: summary2 }
   });
 }
-async function enableAutoMerge(ok, pullRequestNodeId, method) {
+async function createStaleCheckRun(ok, r, oldSha, newSha) {
+  await ok.rest.checks.create({
+    ...r,
+    name: CHECK_NAME,
+    head_sha: oldSha,
+    status: "completed",
+    conclusion: "neutral",
+    output: {
+      title: `Stale: reviewed ${oldSha.slice(0, 7)}, head is now ${newSha ? newSha.slice(0, 7) : "unknown (PR closed)"}`,
+      summary: `Reviewed commit ${oldSha.slice(0, 7)}, but the pull request moved on before the result could be posted, so it was not applied. A newer push will be reviewed separately.`
+    }
+  });
+}
+async function enableAutoMerge(ok, pullRequestNodeId, method, headSha2) {
   await ok.graphql(
-    `mutation($id: ID!, $mergeMethod: PullRequestMergeMethod!) {
-      enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: $mergeMethod }) { clientMutationId }
+    `mutation($id: ID!, $mergeMethod: PullRequestMergeMethod!, $expectedHeadOid: GitObjectID!) {
+      enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: $mergeMethod, expectedHeadOid: $expectedHeadOid }) { clientMutationId }
     }`,
-    { id: pullRequestNodeId, mergeMethod: method.toUpperCase() }
+    { id: pullRequestNodeId, mergeMethod: method.toUpperCase(), expectedHeadOid: headSha2 }
   );
 }
-async function approvePr(ok, r, pull) {
+async function approvePr(ok, r, pull, headSha2) {
   await ok.rest.pulls.createReview({
     ...r,
     pull_number: pull,
+    commit_id: headSha2,
     event: "APPROVE",
     body: APPROVE_BODY
   });
@@ -60302,6 +60320,7 @@ async function produceReviewResult(o) {
     agg2.explanation = explainLane(agg2);
     const body2 = renderComment({
       agg: agg2,
+      headSha: pr.head.sha,
       mode: "rules-only",
       tokensEstimate: 0,
       approval: cfg.approval,
@@ -60503,6 +60522,7 @@ async function produceReviewResult(o) {
   o.onNotes?.([...notes]);
   const body = renderComment({
     agg,
+    headSha: pr.head.sha,
     mode: llm && provider ? provider.label : "rules-only",
     tokensEstimate: tokens2,
     ...storyTokens ? { storyTokens } : {},
@@ -60555,6 +60575,28 @@ function checkFallbackNote(lane, status) {
 }
 async function postReviewResult(r, c) {
   const { ok, repo, cfg, log } = c;
+  if (r.kind !== "learning-block") {
+    let live = null;
+    try {
+      const { data } = await ok.rest.pulls.get({ ...repo, pull_number: r.prNumber });
+      live = { sha: data.head.sha, closed: data.state !== "open" };
+    } catch (e) {
+      log.warning(`Could not re-read the PR head (${e.message}); posting the result anyway.`);
+    }
+    if (live && (live.sha !== r.headSha || live.closed)) {
+      log.warning(live.closed ? `PR closed during review of ${r.headSha.slice(0, 7)}; result not applied.` : `Head moved from ${r.headSha.slice(0, 7)} to ${live.sha.slice(0, 7)} during review; result not applied.`);
+      try {
+        await createStaleCheckRun(ok, repo, r.headSha, live.closed && live.sha === r.headSha ? null : live.sha);
+      } catch (e) {
+        log.warning(`Could not create the stale check run: ${e.message}`);
+      }
+      if (c.onResult) {
+        const { tokens: _t, ...outcome } = r.usage;
+        await Promise.resolve(c.onResult(outcome)).catch((e) => log.warning(`onResult failed: ${e.message}`));
+      }
+      return r.lane;
+    }
+  }
   const body = c.owner ? withSummaryMarker(r.body, c.owner.marker) : r.body;
   await upsertStickyComment(ok, repo, r.prNumber, body, c.owner);
   try {
@@ -60604,8 +60646,8 @@ ${checkFallbackNote(r.lane, status)}`, c.owner);
     cfg.approval,
     r.lane,
     {
-      enableAutoMerge: (m) => enableAutoMerge(ok, r.prNodeId, m),
-      approve: () => approvePr(ok, repo, r.prNumber),
+      enableAutoMerge: (m) => enableAutoMerge(ok, r.prNodeId, m, r.headSha),
+      approve: () => approvePr(ok, repo, r.prNumber, r.headSha),
       dismissOwnApprovals: (msg) => dismissOwnApprovals(ok, repo, r.prNumber, c.botLogin, msg)
     },
     log.info,

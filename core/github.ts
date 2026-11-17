@@ -82,7 +82,7 @@ export async function upsertStickyComment(ok: Octokit, r: Repo, pull: number, bo
 }
 
 export async function createCheckRun(ok: Octokit, r: Repo, headSha: string, agg: Aggregate, mode: LaneGate = "enforce"): Promise<void> {
-  const { title, summary } = checkSummary(agg, mode);
+  const { title, summary } = checkSummary(agg, mode, headSha);
   await ok.rest.checks.create({
     ...r,
     name: CHECK_NAME,
@@ -93,23 +93,41 @@ export async function createCheckRun(ok: Octokit, r: Repo, headSha: string, agg:
   });
 }
 
+/** A neutral check on the reviewed (now outdated) commit: the result was not applied because the PR head moved or closed. */
+export async function createStaleCheckRun(ok: Octokit, r: Repo, oldSha: string, newSha: string | null): Promise<void> {
+  await ok.rest.checks.create({
+    ...r,
+    name: CHECK_NAME,
+    head_sha: oldSha,
+    status: "completed",
+    conclusion: "neutral",
+    output: {
+      title: `Stale: reviewed ${oldSha.slice(0, 7)}, head is now ${newSha ? newSha.slice(0, 7) : "unknown (PR closed)"}`,
+      summary: `Reviewed commit ${oldSha.slice(0, 7)}, but the pull request moved on before the result could be posted, so it was not applied. A newer push will be reviewed separately.`,
+    },
+  });
+}
+
 export async function enableAutoMerge(
   ok: Octokit,
   pullRequestNodeId: string,
   method: "squash" | "merge" | "rebase",
+  headSha: string,
 ): Promise<void> {
+  // expectedHeadOid: GitHub refuses when the head is no longer the reviewed commit.
   await ok.graphql(
-    `mutation($id: ID!, $mergeMethod: PullRequestMergeMethod!) {
-      enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: $mergeMethod }) { clientMutationId }
+    `mutation($id: ID!, $mergeMethod: PullRequestMergeMethod!, $expectedHeadOid: GitObjectID!) {
+      enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: $mergeMethod, expectedHeadOid: $expectedHeadOid }) { clientMutationId }
     }`,
-    { id: pullRequestNodeId, mergeMethod: method.toUpperCase() },
+    { id: pullRequestNodeId, mergeMethod: method.toUpperCase(), expectedHeadOid: headSha },
   );
 }
 
-export async function approvePr(ok: Octokit, r: Repo, pull: number): Promise<void> {
+export async function approvePr(ok: Octokit, r: Repo, pull: number, headSha: string): Promise<void> {
   await ok.rest.pulls.createReview({
     ...r,
     pull_number: pull,
+    commit_id: headSha,
     event: "APPROVE",
     body: APPROVE_BODY,
   });
