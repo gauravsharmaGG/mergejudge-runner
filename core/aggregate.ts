@@ -96,6 +96,10 @@ export function aggregate(files: PrFile[], labels: string[], cfg: Config, llm: L
     }
     const base: FileVerdict = { ...v, source: "rule" };
     if (!l) return base;
+    const mine = (llm?.findings ?? []).filter((f) => f.path === v.path);
+    // A raise that rests only on pre-existing issues is ignored: the rule lane stays.
+    if (LANE_ORDER[l.lane] > LANE_ORDER[v.lane] && mine.length && mine.every((f) => f.preExisting))
+      return { ...base, reasons: [...v.reasons, "AI raise ignored: only pre-existing issues"] };
     const raised = LANE_ORDER[l.lane] > LANE_ORDER[v.lane];
     const agrees = l.lane === v.lane && v.lane !== "auto";
     if (!raised && !agrees) return base;

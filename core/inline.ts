@@ -1,5 +1,5 @@
-import type { Finding } from "./triage.js";
-import { escapeMd } from "./render.js";
+import { newFindings, type Finding } from "./triage.js";
+import { escapeMd, severityTag } from "./render.js";
 
 export const INLINE_MARKER = "<!-- mergejudge:inline";
 export const keyOf = (path: string, line: number) => `${path}:${line}`;
@@ -24,11 +24,11 @@ const marker = (key: string, state: "active" | "resolved", extra: Record<string,
 
 /** Message text of one of our inline comments (marker and prefix removed, markdown escapes undone). */
 export function findingText(body: string): string {
-  return body.replace(/\n*```suggestion\n[\s\S]*?\n```/g, "").replace(/<!--[\s\S]*?-->/g, "").replace(/^\s*(?:⚖️\s*)?\*\*MergeJudge \((?:LLM|AI)\):\*\*\s*/, "").replace(/\\([\\`*_{}\[\]()#+\-.!|<>~])/g, "$1").trim();
+  return body.replace(/\n*```suggestion\n[\s\S]*?\n```/g, "").replace(/<!--[\s\S]*?-->/g, "").replace(/^\s*(?:⚖️\s*)?\*\*MergeJudge \((?:LLM|AI)\):\*\*\s*(?:\*\*(?:Important|Nit):\*\*\s*)?/, "").replace(/\\([\\`*_{}\[\]()#+\-.!|<>~])/g, "$1").trim();
 }
 
 export function inlineBody(f: Finding & { line: number }, ctx: InlineCtx = {}): string {
-  return `${marker(keyOf(f.path, f.line), "active", { sha: tok(ctx.sha), rv: tok(ctx.reviewer) })}\n⚖️ **MergeJudge (AI):** ${escapeMd(f.message)}${f.suggestion ? `\n\n\`\`\`suggestion\n${f.suggestion}\n\`\`\`` : ""}`;
+  return `${marker(keyOf(f.path, f.line), "active", { sha: tok(ctx.sha), rv: tok(ctx.reviewer) })}\n⚖️ **MergeJudge (AI):** ${severityTag(f)}${escapeMd(f.message)}${f.suggestion ? `\n\n\`\`\`suggestion\n${f.suggestion}\n\`\`\`` : ""}`;
 }
 
 /**
@@ -96,7 +96,7 @@ export function planInline(findings: Finding[], existing: ExistingComment[], ctx
   if (keepPaths.size) for (const [key, c] of mine) if (keepPaths.has(pathOfKey(key))) mine.delete(key);
   const plan: InlinePlan = { create: [], update: [] };
   const wanted = new Set<string>();
-  for (const f of findings) {
+  for (const f of newFindings(findings)) {
     if (f.line === undefined || keepPaths.has(f.path)) continue;
     const key = keyOf(f.path, f.line);
     if (wanted.has(key)) continue;

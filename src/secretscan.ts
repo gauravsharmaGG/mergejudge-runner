@@ -4,7 +4,7 @@
  * scanSecrets, placeholder skips included) over it. A hit raises the file and the PR to block; a runner can only raise.
  */
 import { explainLane } from "../core/aggregate.js";
-import { lineFindingsOf, renderComment } from "../core/render.js";
+import { fileFindingsOf, lineFindingsOf, preExistingOf, renderComment } from "../core/render.js";
 import type { LaneGate } from "../core/config.js";
 import { scanSecrets } from "../core/rules.js";
 import type { ReviewResult } from "../core/review.js";
@@ -124,7 +124,7 @@ export function applyRunnerSecretHits(result: ReviewResult, hits: Map<string, st
     ...(result.whereItSits ? { whereItSits: result.whereItSits } : {}),
     agg, mode: result.usage.model ?? "runner", tokensEstimate: result.usage.tokens,
     notes: [...(ctx.notes ?? []), SCAN_NOTE],
-    policyFiles: ctx.policyFiles, fileFindings: result.findings.filter((f) => f.line === undefined),
+    policyFiles: ctx.policyFiles, fileFindings: fileFindingsOf(result.findings), preExistingFindings: preExistingOf(result.findings),
     breakdown: result.usage.breakdown ?? undefined, approval: ctx.approval, laneGate: ctx.laneGate,
     laneMap: ctx.laneMap, prUrl: ctx.prUrl, lineFindings: lineFindingsOf(result.findings),
   });

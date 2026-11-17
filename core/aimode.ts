@@ -3,7 +3,7 @@
  * published engine has no dependency on runner-only code; src/deep.ts re-exports it.
  */
 import { quoteInPatch } from "./rubrics.js";
-import { diffLines, type Finding } from "./triage.js";
+import { diffLines, type Finding, type FindingSeverity } from "./triage.js";
 import type { PrFile } from "./types.js";
 
 export const REVIEW_MODES = ["fast", "deep"] as const;
@@ -19,7 +19,7 @@ export function aiModeOf(cfg: { ai?: { mode?: string | null } | null } | null | 
  * line of a hunk. Anything else is dropped (it is not posted, and it does not raise a lane).
  */
 export function verifyFindingEvidence(
-  finding: { path?: string; line?: number; quote?: string; message?: string },
+  finding: { path?: string; line?: number; quote?: string; message?: string; severity?: FindingSeverity; pre_existing?: boolean },
   files: readonly PrFile[],
 ): Finding | null {
   const path = finding.path?.trim() ?? "";
@@ -31,5 +31,6 @@ export function verifyFindingEvidence(
   if (!quote || !quoteInPatch(quote, file.patch)) return null;
   const line = finding.line;
   if (line === undefined || !Number.isInteger(line) || line <= 0 || !diffLines(file.patch).has(line)) return null;
-  return { path: file.path, line, quote, message };
+  const preExisting = finding.pre_existing === true;
+  return { path: file.path, line, quote, message, ...(finding.severity ? { severity: finding.severity } : {}), ...(preExisting ? { preExisting: true } : {}) };
 }

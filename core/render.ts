@@ -6,6 +6,7 @@ import { renderWhereItSits, type WhereItSits } from "./whereitsits.js";
 import { renderStorySection, type Story } from "./story.js";
 import type { LaneGate } from "./config.js";
 import type { RubricResult } from "./rubrics.js";
+import { findingSeverity, type FindingSeverity } from "./triage.js";
 import { LANE_ORDER, type FileVerdict, type Lane } from "./types.js";
 
 export const MARKER = "<!-- mergejudge:summary -->";
@@ -71,9 +72,11 @@ export interface RenderInput {
   storyTokens?: number;
   notes: string[];
   /** File-level LLM findings (no valid diff line). */
-  fileFindings?: { path: string; message: string }[];
+  fileFindings?: { path: string; message: string; severity?: FindingSeverity }[];
   /** Findings with a verified diff line; they become inline comments right after the sticky is posted. */
-  lineFindings?: { path: string; line: number; message: string }[];
+  lineFindings?: { path: string; line: number; message: string; severity?: FindingSeverity }[];
+  /** Findings on code this PR did not change: listed collapsed in the summary, never inline, never counted. */
+  preExistingFindings?: { path: string; line?: number; message: string }[];
   /** The PR's web URL (html_url). Enables links to diff lines; without it locations are plain `path:line` text. */
   prUrl?: string;
   policyFiles?: { path: string; truncated: boolean }[];
@@ -97,9 +100,20 @@ export interface RenderInput {
 }
 
 /** The findings that carry a verified diff line (the ones that become inline comments). */
-export function lineFindingsOf(findings: { path: string; line?: number; message: string }[]): { path: string; line: number; message: string }[] {
-  return findings.flatMap((f) => (f.line === undefined ? [] : [{ path: f.path, line: f.line, message: f.message }]));
+type Found = { path: string; line?: number; message: string; severity?: FindingSeverity; preExisting?: boolean };
+export function lineFindingsOf(findings: Found[]): { path: string; line: number; message: string; severity?: FindingSeverity }[] {
+  return findings.flatMap((f) => (f.line === undefined || f.preExisting ? [] : [{ path: f.path, line: f.line, message: f.message, ...(f.severity ? { severity: f.severity } : {}) }]));
 }
+
+/** The findings with no verified line that are not pre-existing. */
+export const fileFindingsOf = (findings: Found[]): { path: string; message: string; severity?: FindingSeverity }[] =>
+  findings.filter((f) => f.line === undefined && !f.preExisting).map((f) => ({ path: f.path, message: f.message, ...(f.severity ? { severity: f.severity } : {}) }));
+
+export const preExistingOf = (findings: Found[]): { path: string; line?: number; message: string }[] =>
+  findings.filter((f) => f.preExisting).map((f) => ({ path: f.path, ...(f.line !== undefined ? { line: f.line } : {}), message: f.message }));
+
+/** Bold prefix for a finding message: Important (also when severity is missing) or Nit. */
+export const severityTag = (f: { severity?: FindingSeverity }): string => `**${findingSeverity(f) === "nit" ? "Nit" : "Important"}:** `;
 
 /* ---------- small helpers ---------- */
 
@@ -284,9 +298,9 @@ function whatToCheck(r: RenderInput, rubricOpen: RubricResult[]): string[] {
     const k = key(l.path, l.line);
     if (rubricKeys.has(k) || seen.has(k)) continue;
     seen.add(k);
-    group(l.path).bullets.push(`${loc(l.path, l.line)} ${escapeMd(l.message)}`);
+    group(l.path).bullets.push(`${loc(l.path, l.line)} ${severityTag(l)}${escapeMd(l.message)}`);
   }
-  for (const f of r.fileFindings ?? []) group(f.path).bullets.push(`${escapeMd(f.message)} · _needs a human check (no verified line)_`);
+  for (const f of r.fileFindings ?? []) group(f.path).bullets.push(`${severityTag(f)}${escapeMd(f.message)} · _needs a human check (no verified line)_`);
   if (agg.labelReasons.length) groups.set("\0labels", { title: "PR labels / holds", lane: agg.lane, fixed: "labels", bullets: agg.labelReasons.map(escapeMd) });
 
   const rank = (g: Group) => (g.fixed === "labels" ? -2 : g.fixed === "pr" ? -1 : LANE_ORDER[g.lane]);
@@ -304,6 +318,17 @@ function whatToCheck(r: RenderInput, rubricOpen: RubricResult[]): string[] {
   }
   out.push(...moreNote(shown, total).flatMap((m) => [m, ""]));
   return out;
+}
+
+function preExistingSection(r: RenderInput): string[] {
+  const list = r.preExistingFindings ?? [];
+  if (!list.length) return [];
+  const base = plainHttps(r.prUrl);
+  const rows = list.slice(0, MAX_LIST_ROWS).map((f) => {
+    const where = f.line === undefined ? escapeMd(f.path) : base ? `[${escapeMd(f.path)}:${f.line}](${diffLink(base, f.path, f.line)})` : `${escapeMd(f.path)}:${f.line}`;
+    return `- ${where} **Pre-existing:** ${escapeMd(f.message)}`;
+  });
+  return [`<details><summary>Pre-existing issues (not introduced by this PR): ${list.length}</summary>`, "", ...rows, ...moreNote(rows.length, list.length).map((m) => m), "", "</details>", ""];
 }
 
 function whyThisLane(r: RenderInput, flagged: FileVerdict[]): string[] {
@@ -397,7 +422,7 @@ export function renderComment(r: RenderInput): string {
   out.push(...outcomeLines(agg, flagged.length, problems, r.lineFindings?.length ?? 0, r.laneGate));
   out.push(escapeMd(agg.summary), "");
   const checks = whatToCheck(r, rubricOpen);
-  const rest = [...whyThisLane(r, flagged), ...filesSection(r, flagged, safe), ...allChecks(rubric)];
+  const rest = [...preExistingSection(r), ...whyThisLane(r, flagged), ...filesSection(r, flagged, safe), ...allChecks(rubric)];
   const chart = r.story ? renderStorySection(r.story, r.storyAnimate !== false, r.storyStyle, r.storyImageUrl) : [];
   const list = r.story ? renderStorySection(r.story, false, r.storyStyle, null, false) : [];
   const sits = r.whereItSits ? renderWhereItSits(r.whereItSits) : [];

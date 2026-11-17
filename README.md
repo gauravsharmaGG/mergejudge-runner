@@ -532,6 +532,14 @@ The summary also explains the `mergejudge/lane` check: `review` is advisory (the
 
 Results are pinned to the commit they reviewed: the summary and check name it ("Reviewed commit abc1234"). The head is re-read before anything is posted; if a push landed during the review (or the PR closed), that result is stale and is not applied (only a neutral `Stale: reviewed …` check goes on the old commit) and the newer push is reviewed on its own. Bot approvals and native auto-merge are likewise pinned to the reviewed commit, so GitHub refuses them if the head has moved.
 
+### Finding tags: Important, Nit, Pre-existing
+
+Each AI finding carries a tag in the inline comment and the summary:
+
+- **Important:** a bug, security issue, data loss or broken behaviour (also the default when the AI gives no severity).
+- **Nit:** a minor or style point.
+- **Pre-existing:** a problem in code this PR did not change (the AI marks it `pre_existing`). These are not posted inline, not counted by `review.answer_findings`, and get no Shepherd suggestion. They appear only in a collapsed "Pre-existing issues (not introduced by this PR)" block in the summary, and they never raise the lane: if the AI raised a file only because of pre-existing issues, the rule lane stays.
+
 ## Changelog
 
 Full history: [CHANGELOG.md](./CHANGELOG.md).
