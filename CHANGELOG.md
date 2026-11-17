@@ -6,7 +6,7 @@ Release notes for `mergejudge-runner`. Versions below match `package.json`, `src
 
 ## Unreleased
 
-Nothing yet.
+- **Severity tags on AI findings.** Findings are tagged **Important** or **Nit** (a missing severity counts as Important), and findings the AI marks as being in code the PR did not change are **Pre-existing**. Pre-existing findings are listed in a collapsed block in the summary, are not posted inline, are not counted by `review.answer_findings` or Shepherd, and never raise a file's lane. The new `severity` / `pre_existing` fields are optional, so older cached results still decode. See the README.
 
 ## 0.8.0
 

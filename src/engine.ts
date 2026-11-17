@@ -112,7 +112,7 @@ export const CODEX_OUTPUT_SCHEMA = {
         type: "object", additionalProperties: false, required: ["path", "lane", "reason", "findings"],
         properties: {
           path: { type: "string" }, lane: { type: "string", enum: ["auto", "review", "block"] }, reason: { type: "string" },
-          findings: { type: "array", items: { type: "object", additionalProperties: false, required: ["line", "quote", "message"], properties: { line: { type: "integer" }, quote: { type: "string" }, message: { type: "string" } } } },
+          findings: { type: "array", items: { type: "object", additionalProperties: false, required: ["line", "quote", "message", "severity", "pre_existing"], properties: { line: { type: "integer" }, quote: { type: "string" }, message: { type: "string" }, severity: { type: "string", enum: ["important", "nit"] }, pre_existing: { type: "boolean" } } } },
         },
       },
     },

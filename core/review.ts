@@ -17,7 +17,7 @@ import { createProvider, type LlmCallUsage, type WorkersAiBinding } from "./llm/
 import type { LlmProvider } from "./llm/provider.js";
 import { canUseTools } from "./llm/provider.js";
 import { filterPolicyPaths, loadPolicies, type Policies } from "./policy.js";
-import { CHECK_NAME, EMOJI, lineFindingsOf, renderComment, withSummaryMarker } from "./render.js";
+import { CHECK_NAME, EMOJI, fileFindingsOf, lineFindingsOf, preExistingOf, renderComment, withSummaryMarker } from "./render.js";
 import { selectCriteria } from "./rubrics.js";
 import { excludeFromLlm, isMergeJudgeConfigPath } from "./rules.js";
 import { gatherContext, type ContextPiece, type ContextSource } from "./context.js";
@@ -465,7 +465,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
   o.onNotes?.([...notes]);
   const body = renderComment({
     agg, mode: llm && provider ? provider.label : "rules-only", tokensEstimate: tokens, ...(storyTokens ? { storyTokens } : {}), notes,
-    policyFiles: policies.used, fileFindings: findings.filter((f) => f.line === undefined),
+    policyFiles: policies.used, fileFindings: fileFindingsOf(findings), preExistingFindings: preExistingOf(findings),
     breakdown: breakdown ?? undefined, approval: cfg.approval, laneMap: cfg.review.lane_map, prUrl: pr.html_url,
     story, storyImageUrl, storyStyle: cfg.comment.flow_chart_style, storyAnimate: cfg.comment.flow_chart_animate,
     ...(whereItSits ? { whereItSits } : {}),

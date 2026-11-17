@@ -23,7 +23,8 @@ type FatalError = Error & { kind: string };
 export const SECOND_PASS_RULES = `Second pass (ai.mode deep). The numbered diff is the only evidence that a finding may cite. Look for defects a single hunk can hide: cross-hunk logic, concurrency, security, data loss and API contract breaks. Before you report a finding, try to falsify it from the diff: a guard on another line, a type that makes the bug impossible, or a change that is only style or wording. Report it only when you cannot falsify it.
 Each finding MUST include "quote" copied verbatim from that file's diff, without the L<n> prefix. A finding whose quote is not in the diff is dropped and does not count. Do not repeat a finding you were already shown. You may only raise a file lane (auto, review, block). You cannot lower one. auto means low risk, not a guarantee. Deterministic base-branch rules remain the floor.
 Respond with ONLY strict JSON, no prose, no code fences:
-{"summary":"<what this pass added, or empty>","files":[{"path":"<exact path from the input>","lane":"auto|review|block","reason":"<short reason>","findings":[{"line":<new-file line number>,"quote":"<exact diff line>","message":"<short concrete issue>"}]}]}`;
+{"summary":"<what this pass added, or empty>","files":[{"path":"<exact path from the input>","lane":"auto|review|block","reason":"<short reason>","findings":[{"line":<new-file line number>,"quote":"<exact diff line>","message":"<short concrete issue>","severity":"important|nit","pre_existing":false}]}]}
+severity: "important" = bug, security, data loss or broken behaviour; "nit" = minor or style. pre_existing: true only when the problem is in code this PR did not change.`;
 
 export interface SecondPassOutcome {
   llm: LlmTriage;
@@ -76,7 +77,7 @@ export function applySecondPass(first: LlmTriage, raw: TriageOutput, files: Prom
     if (!known.has(f.path)) continue;
     let verifiedOnFile = 0;
     for (const x of f.findings) {
-      const v = verifyFindingEvidence({ path: f.path, line: x.line, quote: x.quote, message: x.message }, files);
+      const v = verifyFindingEvidence({ path: f.path, line: x.line, quote: x.quote, message: x.message, severity: x.severity, pre_existing: x.pre_existing }, files);
       if (!v) { dropped++; continue; }
       verifiedOnFile++;
       const key = findingKey(v);

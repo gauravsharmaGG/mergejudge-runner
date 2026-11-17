@@ -236,7 +236,7 @@ describe("What to check", () => {
   });
 
   it("marks file-level findings and shows label holds", () => {
-    expect(wtc).toContain("- unclear · _needs a human check (no verified line)_");
+    expect(wtc).toContain("- **Important:** unclear · _needs a human check (no verified line)_");
     expect(wtc).toContain("- label \\`hold\\` holds this PR");
   });
 

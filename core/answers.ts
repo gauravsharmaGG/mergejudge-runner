@@ -1,5 +1,5 @@
 import { keyOf } from "./inline.js";
-import type { Finding } from "./triage.js";
+import { newFindings, type Finding } from "./triage.js";
 
 /** One MergeJudge inline thread as the answer check sees it. */
 export interface FindingThread {
@@ -31,7 +31,7 @@ export function unansweredFindings(findings: Finding[], threads: FindingThread[]
   for (const t of threads) if (!byKey.has(t.key)) byKey.set(t.key, t);
   const keys: string[] = [];
   const seen = new Set<string>();
-  for (const f of findings) {
+  for (const f of newFindings(findings)) {
     if (f.line === undefined) continue;
     const key = keyOf(f.path, f.line);
     if (seen.has(key)) continue;

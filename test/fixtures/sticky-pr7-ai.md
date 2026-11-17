@@ -17,9 +17,9 @@ Adds a CI workflow, a Shepherd workflow pinned to a runner commit, a small depen
 - **Tests (low, 2/5):** A math test is added but the new lint script and workflow behaviour are untested; the test also imports src/math.js which is not in this PR. [L3](https://github.com/gauravsharmaGG/mergejudge-free-test/pull/7/files#diff-e2c68e7e194e330dc2e863bfcf48a429b7baa049c4ee41da7ffe8034faf42dbdR3)
 
 **.github/workflows/shepherd.yml**
-- [L26](https://github.com/gauravsharmaGG/mergejudge-free-test/pull/7/files#diff-d3230df32ebe571bd9b3ea9b7d89d00a0f3f9def5f752c8f57fc50d0f4981578R26) actions: write allows re-running/cancelling workflows; confirm this is needed and scoped as intended.
-- [L37](https://github.com/gauravsharmaGG/mergejudge-free-test/pull/7/files#diff-d3230df32ebe571bd9b3ea9b7d89d00a0f3f9def5f752c8f57fc50d0f4981578R37) issue\_comment path does not check commenter permission here; ensure the runner gates on write access before acting.
-- [L55](https://github.com/gauravsharmaGG/mergejudge-free-test/pull/7/files#diff-d3230df32ebe571bd9b3ea9b7d89d00a0f3f9def5f752c8f57fc50d0f4981578R55) Third-party action receives App private key and write tokens; verify the pinned SHA corresponds to the reviewed runner code.
+- [L26](https://github.com/gauravsharmaGG/mergejudge-free-test/pull/7/files#diff-d3230df32ebe571bd9b3ea9b7d89d00a0f3f9def5f752c8f57fc50d0f4981578R26) **Important:** actions: write allows re-running/cancelling workflows; confirm this is needed and scoped as intended.
+- [L37](https://github.com/gauravsharmaGG/mergejudge-free-test/pull/7/files#diff-d3230df32ebe571bd9b3ea9b7d89d00a0f3f9def5f752c8f57fc50d0f4981578R37) **Important:** issue\_comment path does not check commenter permission here; ensure the runner gates on write access before acting.
+- [L55](https://github.com/gauravsharmaGG/mergejudge-free-test/pull/7/files#diff-d3230df32ebe571bd9b3ea9b7d89d00a0f3f9def5f752c8f57fc50d0f4981578R55) **Important:** Third-party action receives App private key and write tokens; verify the pinned SHA corresponds to the reviewed runner code.
 
 <details><summary><b>Why this lane?</b> 6 files matched 4 rules</summary>
 

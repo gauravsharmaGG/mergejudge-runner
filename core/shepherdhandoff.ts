@@ -1,7 +1,7 @@
 import { escapeMd } from "./render.js";
 import { RULE, RULE_STATUS, RULE_TITLE, type RuleId } from "./shepherdrules.js";
 import { isShepherdCommitMessage, type AttemptRecord, type Fingerprint } from "./shepherdfail.js";
-import type { Finding } from "./triage.js";
+import { newFindings, type Finding } from "./triage.js";
 import { redact } from "./redact.js";
 
 export const HANDOFF_MARKER = "<!-- mergejudge:shepherd-handoff -->";
@@ -93,7 +93,7 @@ export interface ReviewGuard {
 export function reviewGuard(headCommitMessage: string | null | undefined, touchedFiles: readonly string[], findings: readonly Finding[]): ReviewGuard {
   if (!isShepherdCommitMessage(headCommitMessage)) return { suggestions: true, syncInline: true, pingPong: [] };
   const touched = new Set(touchedFiles);
-  return { suggestions: false, syncInline: false, pingPong: findings.filter((f) => touched.has(f.path)) };
+  return { suggestions: false, syncInline: false, pingPong: newFindings(findings).filter((f) => touched.has(f.path)) };
 }
 
 export const PING_PONG_RULE = RULE.L3;

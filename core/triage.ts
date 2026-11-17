@@ -17,7 +17,8 @@ Classify each changed file into a lane:
 - "review": a human should look (logic changes, config, dependencies, anything unclear)
 - "block": must not merge (leaked secrets, malicious or clearly dangerous code)
 Respond with ONLY strict JSON, no prose, no code fences, matching exactly:
-{"summary": "<1-3 sentence neutral summary of the PR>", "files": [{"path": "<exact path from the input>", "lane": "auto|review|block", "reason": "<short reason>", "findings": [{"line": <new-file line number>, "quote": "<the exact diff line, copied verbatim without the L<n> prefix>", "message": "<short concrete issue>"}]}]}
+{"summary": "<1-3 sentence neutral summary of the PR>", "files": [{"path": "<exact path from the input>", "lane": "auto|review|block", "reason": "<short reason>", "findings": [{"line": <new-file line number>, "quote": "<the exact diff line, copied verbatim without the L<n> prefix>", "message": "<short concrete issue>", "severity": "important|nit", "pre_existing": false}]}]}
+Each finding: severity "important" = bug, security, data loss or broken behaviour; "nit" = minor or style. pre_existing true only when the problem is in code this PR did not change (it is already on the base branch).
 Diff lines are prefixed with their new-file line number like "L12 +code". Add findings only for specific risky or wrong lines (max 5 per file); use [] when none. For a line finding, copy the exact diff line into "quote"; without a quote that appears verbatim in that file's diff the finding will not be posted inline.
 Only use paths that appear in the input.`;
 
@@ -231,11 +232,16 @@ export function numberPatch(patch: string): string {
   }).join("\n");
 }
 
+export type FindingSeverity = "important" | "nit";
 const laneEnum = z.enum(["auto", "review", "block"]);
 export const triageOutputSchema = z.object({
   summary: z.string(),
   files: z.array(z.object({ path: z.string(), lane: laneEnum, reason: z.string().default(""),
-    findings: z.array(z.object({ line: z.coerce.number().int(), quote: z.string().optional(), message: z.string(), suggestion: z.string().optional() })).max(50).default([]),
+    findings: z.array(z.object({ line: z.coerce.number().int(), quote: z.string().optional(), message: z.string(), suggestion: z.string().optional(),
+      // Lenient: a junk value becomes undefined / false instead of failing the whole parse.
+      severity: z.unknown().transform((v): FindingSeverity | undefined => (v === "important" || v === "nit" ? v : undefined)).optional(),
+      pre_existing: z.unknown().transform((v) => v === true).optional(),
+    })).max(50).default([]),
   })),
   rubric: rubricOutputSchema,
 });
@@ -321,7 +327,16 @@ export interface Finding {
   message: string;
   /** Shepherd tier 1: replacement for exactly the line above (may hold newlines). Only on a verified `line`, never on a protected path. */
   suggestion?: string;
+  /** Missing means "important" (older cached results). */
+  severity?: FindingSeverity;
+  /** The problem is in code this PR did not change (set only from the model's pre_existing flag). */
+  preExisting?: boolean;
 }
+
+export const findingSeverity = (f: { severity?: FindingSeverity }): FindingSeverity => f.severity ?? "important";
+
+/** Findings that count for inline comments, the answer gate and Shepherd; pre-existing ones are only listed in the summary. */
+export const newFindings = <T extends { preExisting?: boolean }>(findings: readonly T[]): T[] => findings.filter((f) => !f.preExisting);
 
 /** New-side line texts of a patch (added + context lines, without the diff prefix). */
 function newSideText(patch: string | undefined): Map<number, string> {
@@ -375,7 +390,10 @@ export function validateAgainstFiles(out: TriageOutput, files: PrFile[], criteri
       if (seen.has(key)) continue;
       seen.add(key);
       const suggestion = line !== undefined && text ? keepSuggestion(x.suggestion, text.get(line)) : undefined;
-      findings.push({ path: f.path, ...(line !== undefined ? { line, quote } : {}), message, ...(suggestion !== undefined ? { suggestion } : {}) });
+      // Only the model's flag: a finding quoted on a context line is often about a change next to it (a removed guard), so line position alone is not proof.
+      const preExisting = x.pre_existing === true;
+      findings.push({ path: f.path, ...(line !== undefined ? { line, quote } : {}), message, ...(suggestion !== undefined ? { suggestion } : {}),
+        ...(x.severity ? { severity: x.severity } : {}), ...(preExisting ? { preExisting: true } : {}) });
     }
   }
   return { summary: out.summary.slice(0, 600), files: map, findings: findings.slice(0, MAX_FINDINGS),

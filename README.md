@@ -529,6 +529,14 @@ AI line comments are posted inline only when the finding includes a quote of the
 
 The summary also explains the `mergejudge/lane` check: `review` is advisory (the check concludes `neutral`), and only `block` fails it. To make `block` stop merges, require the check `mergejudge/lane` in branch protection or rulesets.
 
+### Finding tags: Important, Nit, Pre-existing
+
+Each AI finding carries a tag in the inline comment and the summary:
+
+- **Important:** a bug, security issue, data loss or broken behaviour (also the default when the AI gives no severity).
+- **Nit:** a minor or style point.
+- **Pre-existing:** a problem in code this PR did not change (the AI marks it `pre_existing`). These are not posted inline, not counted by `review.answer_findings`, and get no Shepherd suggestion. They appear only in a collapsed "Pre-existing issues (not introduced by this PR)" block in the summary, and they never raise the lane: if the AI raised a file only because of pre-existing issues, the rule lane stays.
+
 ## Changelog
 
 Full history: [CHANGELOG.md](./CHANGELOG.md).
