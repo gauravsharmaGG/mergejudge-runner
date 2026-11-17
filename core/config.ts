@@ -130,8 +130,13 @@ const shepherdSchema = z
   })
   .default(DEFAULT_SHEPHERD);
 
+/** `lane_gate`: how the `mergejudge/lane` check and approvals follow the lane. enforce = today's behaviour; observe never fails the check and skips approvals; off always passes. */
+export const LANE_GATES = ["off", "observe", "enforce"] as const;
+export type LaneGate = (typeof LANE_GATES)[number];
+
 export const configSchema = z.object({
   provider: providerSchema,
+  lane_gate: z.enum(LANE_GATES).default("enforce"),
   lanes: z
     .object({
       auto: z.array(z.string()).default(DEFAULT_AUTO),

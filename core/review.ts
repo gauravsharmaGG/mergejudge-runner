@@ -3,7 +3,7 @@ import { applyApproval } from "./approval.js";
 import type { Config } from "./config.js";
 import { maxLane, type Lane, type PrFile } from "./types.js";
 import {
-  approvePr, createCheckRun, dismissOwnApprovals, enableAutoMerge, fetchPrFiles, fetchRepoFile, UNLISTED_FILES_PATH,
+  approvePr, createCheckRun, createStaleCheckRun, dismissOwnApprovals, enableAutoMerge, fetchPrFiles, fetchRepoFile, UNLISTED_FILES_PATH,
   syncInlineFindings, upsertStickyComment, readStickyBody, listFindingThreads, compareChangedFiles, githubContextSource,
   type CommentOwner, type Octokit, type Repo,
 } from "./github.js";
@@ -262,7 +262,7 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
     };
     agg.explanation = explainLane(agg);
     const body = renderComment({
-      agg, mode: "rules-only", tokensEstimate: 0, approval: cfg.approval, laneMap: cfg.review.lane_map, prUrl: pr.html_url, notes: [proposal ? "Head is a learning proposal branch — LLM skipped." : "Head is the learning branch — LLM skipped."],
+      agg, headSha: pr.head.sha, mode: "rules-only", tokensEstimate: 0, approval: cfg.approval, laneMap: cfg.review.lane_map, prUrl: pr.html_url, notes: [proposal ? "Head is a learning proposal branch — LLM skipped." : "Head is the learning branch — LLM skipped."],
     });
     return {
       schemaVersion: 1, kind: "learning-block", prNumber: number, headSha: pr.head.sha, prNodeId: pr.node_id,
@@ -464,9 +464,9 @@ export async function produceReviewResult(o: ProduceInput): Promise<ReviewResult
   }
   o.onNotes?.([...notes]);
   const body = renderComment({
-    agg, mode: llm && provider ? provider.label : "rules-only", tokensEstimate: tokens, ...(storyTokens ? { storyTokens } : {}), notes,
+    agg, headSha: pr.head.sha, mode: llm && provider ? provider.label : "rules-only", tokensEstimate: tokens, ...(storyTokens ? { storyTokens } : {}), notes,
     policyFiles: policies.used, fileFindings: fileFindingsOf(findings), preExistingFindings: preExistingOf(findings),
-    breakdown: breakdown ?? undefined, approval: cfg.approval, laneMap: cfg.review.lane_map, prUrl: pr.html_url,
+    breakdown: breakdown ?? undefined, approval: cfg.approval, laneGate: cfg.lane_gate, laneMap: cfg.review.lane_map, prUrl: pr.html_url,
     story, storyImageUrl, storyStyle: cfg.comment.flow_chart_style, storyAnimate: cfg.comment.flow_chart_animate,
     ...(whereItSits ? { whereItSits } : {}),
     lineFindings: lineFindingsOf(findings),
@@ -509,11 +509,31 @@ export function checkFallbackNote(lane: Lane, status?: number): string {
 /** Perform every GitHub write for a ReviewResult: sticky comment, check run, inline findings, approval. */
 export async function postReviewResult(r: ReviewResult, c: PostContext): Promise<Lane> {
   const { ok, repo, cfg, log } = c;
+  // A push during the review moves the head: the result is for an old commit and must not be applied to the new one.
+  if (r.kind !== "learning-block") {
+    let live: { sha: string; closed: boolean } | null = null;
+    try {
+      const { data } = await ok.rest.pulls.get({ ...repo, pull_number: r.prNumber });
+      live = { sha: data.head.sha, closed: data.state !== "open" };
+    } catch (e) { log.warning(`Could not re-read the PR head (${(e as Error).message}); posting the result anyway.`); }
+    if (live && (live.sha !== r.headSha || live.closed)) {
+      log.warning(live.closed ? `PR closed during review of ${r.headSha.slice(0, 7)}; result not applied.` : `Head moved from ${r.headSha.slice(0, 7)} to ${live.sha.slice(0, 7)} during review; result not applied.`);
+      try { await createStaleCheckRun(ok, repo, r.headSha, live.closed && live.sha === r.headSha ? null : live.sha); }
+      catch (e) { log.warning(`Could not create the stale check run: ${(e as Error).message}`); }
+      if (c.onResult) {
+        const { tokens: _t, ...outcome } = r.usage;
+        await Promise.resolve(c.onResult(outcome)).catch((e) => log.warning(`onResult failed: ${(e as Error).message}`));
+      }
+      return r.lane;
+    }
+  }
   // A comment owner posts the same body under its own marker, so two MergeJudges on one PR each keep a summary.
   const body = c.owner ? withSummaryMarker(r.body, c.owner.marker) : r.body;
   await upsertStickyComment(ok, repo, r.prNumber, body, c.owner);
   try {
-    await createCheckRun(ok, repo, r.headSha, r.agg);
+    // The learning-branch block is a safety rule for MergeJudge's own data branch: it fails the check whatever `lane_gate` says.
+    const gate = r.kind === "learning-block" ? "enforce" : cfg.lane_gate;
+    await createCheckRun(ok, repo, r.headSha, r.agg, gate);
   } catch (e) {
     // A refusal (403 read-only token on fork PRs or no `checks: write`, 404/422 unknown commit) is permanent and must not
     // fail the whole review: the lane goes into the sticky comment instead. Anything else (5xx, network) still throws, so
@@ -549,11 +569,13 @@ export async function postReviewResult(r: ReviewResult, c: PostContext): Promise
       log.warning(`Could not post inline findings: ${(e as Error).message}`);
     }
   }
-  await applyApproval(
+  if (cfg.lane_gate !== "enforce") {
+    log.info(`lane_gate ${cfg.lane_gate}: approval and auto-merge skipped`);
+  } else await applyApproval(
     cfg.approval, r.lane,
     {
-      enableAutoMerge: (m) => enableAutoMerge(ok, r.prNodeId, m),
-      approve: () => approvePr(ok, repo, r.prNumber),
+      enableAutoMerge: (m) => enableAutoMerge(ok, r.prNodeId, m, r.headSha),
+      approve: () => approvePr(ok, repo, r.prNumber, r.headSha),
       dismissOwnApprovals: (msg) => dismissOwnApprovals(ok, repo, r.prNumber, c.botLogin, msg),
     },
     log.info,

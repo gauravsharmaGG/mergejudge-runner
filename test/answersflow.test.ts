@@ -37,7 +37,7 @@ function setup(o: Opts = {}) {
       return {};
     },
     rest: {
-      pulls: { listFiles: "files", listReviewComments: "reviewComments", createReview: async (a: unknown) => rec("createReview", a), updateReviewComment: async (a: unknown) => rec("updateReviewComment", a) },
+      pulls: { get: async () => ({ data: { state: "open", head: { sha: HEAD } } }), listFiles: "files", listReviewComments: "reviewComments", createReview: async (a: unknown) => rec("createReview", a), updateReviewComment: async (a: unknown) => rec("updateReviewComment", a) },
       issues: { listComments: "comments", createComment: async (a: unknown) => rec("createComment", a), updateComment: async (a: unknown) => rec("updateComment", a) },
       checks: { create: async (a: unknown) => rec("check", a) },
       repos: {

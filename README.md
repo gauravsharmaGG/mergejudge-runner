@@ -214,6 +214,7 @@ No config file is required. Built-in defaults apply, and the file is read from t
 | `provider.model` | Model id from your provider. Examples: `claude-sonnet-4-20250514`, `gpt-4.1`, `gpt-4o`. |
 | `provider.base_url` | OpenAI-compatible host. Use this for Gemini's OpenAI-compatible endpoint or local Ollama (`http://127.0.0.1:11434/v1`). |
 | `provider.api_key_env` | Name of the env var that holds your key. Default depends on the provider (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `ZAI_API_KEY`). The variable must be non-empty or the review stays rules-only. |
+| `lane_gate` | `enforce` (default), `observe`, or `off`. `enforce` is the behaviour described here: `block` fails the `mergejudge/lane` check and approvals/auto-merge follow the lane. `observe` is a good way to try MergeJudge on a repo first: comments and findings are posted, the check never fails (`block` and `review` conclude `neutral`, and the title says what the lane would have been), and no bot approval, auto-merge or dismissal happens. `off` posts only comments and findings; the check always passes, so a required check never hangs. The learning-branch block always fails the check. |
 | `ai.mode` | `fast` (default, one pass) or `deep` (second pass). Same switch as Action `review_mode`, `MERGEJUDGE_MODE`, and CLI `--deep`. |
 | `review.mode` | How much surrounding code is attached: `diff` (default), `context`, or `deep` (callers, imports, related files). This is not the pass count. |
 | `review.security` | Optional boolean. `true` adds the `sec.audit.*` pack. Off unless set on the base branch. Action only. |
@@ -528,6 +529,8 @@ shepherd:
 AI line comments are posted inline only when the finding includes a quote of the diff line that verifies against the PR diff. Findings without a verifiable quote are not posted inline; they are listed in the summary comment under "❔ Needs human", with a count. No config is needed.
 
 The summary also explains the `mergejudge/lane` check: `review` is advisory (the check concludes `neutral`), and only `block` fails it. To make `block` stop merges, require the check `mergejudge/lane` in branch protection or rulesets.
+
+Results are pinned to the commit they reviewed: the summary and check name it ("Reviewed commit abc1234"). The head is re-read before anything is posted; if a push landed during the review (or the PR closed), that result is stale and is not applied (only a neutral `Stale: reviewed …` check goes on the old commit) and the newer push is reviewed on its own. Bot approvals and native auto-merge are likewise pinned to the reviewed commit, so GitHub refuses them if the head has moved.
 
 ### Finding tags: Important, Nit, Pre-existing
 

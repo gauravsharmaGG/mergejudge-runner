@@ -12,9 +12,9 @@ describe("enableAutoMerge", () => {
       return new Response(JSON.stringify({ data: { enablePullRequestAutoMerge: { clientMutationId: null } } }), { status: 200, headers: { "content-type": "application/json" } });
     };
     const ok = github.getOctokit("t", { request: { fetch } });
-    await enableAutoMerge(ok, "PR_1", "squash");
+    await enableAutoMerge(ok, "PR_1", "squash", "a".repeat(40));
     expect(sent).toHaveLength(1);
-    expect(sent[0].variables).toEqual({ id: "PR_1", mergeMethod: "SQUASH" });
+    expect(sent[0].variables).toEqual({ id: "PR_1", mergeMethod: "SQUASH", expectedHeadOid: "a".repeat(40) });
     expect(sent[0].query).toContain("mergeMethod: $mergeMethod");
   });
 });
