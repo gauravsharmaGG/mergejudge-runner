@@ -529,6 +529,8 @@ AI line comments are posted inline only when the finding includes a quote of the
 
 The summary also explains the `mergejudge/lane` check: `review` is advisory (the check concludes `neutral`), and only `block` fails it. To make `block` stop merges, require the check `mergejudge/lane` in branch protection or rulesets.
 
+Results are pinned to the commit they reviewed: the summary and check name it ("Reviewed commit abc1234"). The head is re-read before anything is posted; if a push landed during the review (or the PR closed), that result is stale and is not applied (only a neutral `Stale: reviewed …` check goes on the old commit) and the newer push is reviewed on its own. Bot approvals and native auto-merge are likewise pinned to the reviewed commit, so GitHub refuses them if the head has moved.
+
 ## Changelog
 
 Full history: [CHANGELOG.md](./CHANGELOG.md).
