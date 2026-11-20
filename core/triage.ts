@@ -34,6 +34,18 @@ export function codeAutoCandidates(files: PrFile[], cfg: Config): Set<string> {
 /** Extra system-prompt text, only when there is at least one candidate in this PR. */
 export const codeAutoPrompt = (files: PrFile[], cfg: Config): string => (codeAutoCandidates(files, cfg).size ? `\n\n${CODE_AUTO_RULES}` : "");
 
+/** A GitHub Actions workflow file (.github/workflows/**.yml or .yaml, at any depth below workflows/). */
+const WORKFLOW_FILE = /^\.github\/workflows\/.+\.ya?ml$/;
+
+export const WORKFLOW_RULES = `Workflow checks; every finding needs a concrete fix.
+1. Concurrency: a fixed group with cancel-in-progress: false still lets a newer pending run replace an older one. To serialize and keep every run, add queue: max; name the group.
+2. Failure propagation: a fallible new step (upload-artifact, if-no-files-found: error) fails the job; later steps skip under the default success(), dependent jobs via if: success() or needs.<job>.result — name them. A later step reading local files (not the artifact) is independent: suggest continue-on-error: true and/or if: always(); keep jobs that must require success on needs.
+3. Stale text: unchanged echo, GITHUB_STEP_SUMMARY, log or step/job-name lines now wrong, even outside hunks. Anchor and quote the changed line that caused it; name the stale text and location; never quote beyond the diff.`;
+
+/** Extra system-prompt text, only when the PR touches a GitHub Actions workflow file (path or previous path). */
+export const workflowPrompt = (files: PrFile[]): string =>
+  files.some((f) => WORKFLOW_FILE.test(f.path) || (f.previousPath ? WORKFLOW_FILE.test(f.previousPath) : false)) ? `\n\n${WORKFLOW_RULES}` : "";
+
 export const POLICY_DELIM = "repo_policy";
 
 export interface PromptContext {
@@ -474,7 +486,7 @@ export async function runTriage(
   provider: LlmProvider, input: PromptInput, cfg: Config, ctx: PromptContext & { skippedDiffFiles?: string[] } = {},
   log: (m: string) => void = () => {}, warn: (m: string) => void = log,
 ): Promise<TriageResult> {
-  const system = buildSystemPrompt(ctx) + codeAutoPrompt(input.files, cfg) + (input.context?.length ? `\n\n${CONTEXT_RULES}` : "");
+  const system = buildSystemPrompt(ctx) + codeAutoPrompt(input.files, cfg) + workflowPrompt(input.files) + (input.context?.length ? `\n\n${CONTEXT_RULES}` : "");
   const { prompt, diffTokens: diffOnly, contextTokens, trimmed } = buildUserPrompt(input, cfg, system);
   const diffTokens = diffOnly + contextTokens; // total user-prompt tokens; context reported separately
   const skipped = ctx.skippedDiffFiles ?? [];

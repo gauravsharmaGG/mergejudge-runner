@@ -1,0 +1,32 @@
+name: Inventory scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: inventory-scan-${{ github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build report
+        run: ./scripts/scan.sh --out report.txt
+      - name: Compare with previous
+        run: ./scripts/compare.sh report.txt
+      - name: Summary
+        run: |
+          echo "Detailed inventory publication is disabled." >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    needs: scan
+    if: success()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Publish index
+        run: ./scripts/publish.sh
