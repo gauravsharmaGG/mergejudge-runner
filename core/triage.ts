@@ -6,7 +6,7 @@ import { completeWithMeta, type LlmProvider } from "./llm/provider.js";
 import type { ContextPiece } from "./context.js";
 import type { Lane, PrFile } from "./types.js";
 import { classifyFiles } from "./rules.js";
-import { criteriaPrompt, evaluateRubric, quoteInPatch, rubricOutputSchema, type Criterion, type RubricResult } from "./rubrics.js";
+import { criteriaPrompt, evaluateRubric, lenientLine, quoteInPatch, rubricOutputSchema, type Criterion, type RubricResult } from "./rubrics.js";
 
 export const DELIM = "untrusted_pr_data";
 
@@ -233,11 +233,26 @@ export function numberPatch(patch: string): string {
 }
 
 export type FindingSeverity = "important" | "nit";
+export { lenientLine };
+
+/** The single changed-or-context new-file line whose text equals `quote` (L<n> prefix and diff marker stripped), else undefined. */
+function lineForQuote(quote: string | undefined, text: Map<number, string>): number | undefined {
+  const q = quote?.replace(/^L\d+\s/i, "").replace(/^[+ ]/, "").trim();
+  if (!q || q.length < 4) return undefined;
+  let hit: number | undefined;
+  for (const [n, t] of text) {
+    if (t.trim() !== q) continue;
+    if (hit !== undefined) return undefined; // ambiguous: stays file-level
+    hit = n;
+  }
+  return hit;
+}
 const laneEnum = z.enum(["auto", "review", "block"]);
 export const triageOutputSchema = z.object({
   summary: z.string(),
   files: z.array(z.object({ path: z.string(), lane: laneEnum, reason: z.string().default(""),
-    findings: z.array(z.object({ line: z.coerce.number().int(), quote: z.string().optional(), message: z.string(), suggestion: z.string().optional(),
+    // Lenient like severity: models sometimes put the diff line itself in "line" ("L9 +code" or just the code).
+    findings: z.array(z.object({ line: z.unknown().transform(lenientLine).optional(), quote: z.string().optional(), message: z.string(), suggestion: z.string().optional(),
       // Lenient: a junk value becomes undefined / false instead of failing the whole parse.
       severity: z.unknown().transform((v): FindingSeverity | undefined => (v === "important" || v === "nit" ? v : undefined)).optional(),
       pre_existing: z.unknown().transform((v) => v === true).optional(),
@@ -380,12 +395,15 @@ export function validateAgainstFiles(out: TriageOutput, files: PrFile[], criteri
     if (!pf) continue;
     const valid = diffLines(pf.patch);
     const text = suggestions?.(f.path) ? newSideText(pf.patch) : undefined;
+    let sideText: Map<number, string> | undefined; // built only when a finding has no usable line number
     for (const x of f.findings) {
       const message = x.message.trim().slice(0, 300);
       if (!message) continue;
       // Quiet default: a line stays inline-eligible only when its quote verifies against this file's patch.
       const quote = x.quote?.trim().slice(0, 200);
-      const line = valid.has(x.line) && quote && quoteInPatch(quote, pf.patch) ? x.line : undefined;
+      // No usable number (the model put the code in "line"): recover it when the quote matches exactly one diff line.
+      const at = x.line ?? lineForQuote(quote, (sideText ??= newSideText(pf.patch)));
+      const line = at !== undefined && valid.has(at) && quote && quoteInPatch(quote, pf.patch) ? at : undefined;
       const key = `${f.path}:${line ?? "file"}:${message}`;
       if (seen.has(key)) continue;
       seen.add(key);

@@ -53743,6 +53743,13 @@ function createGuardedWriter(raw, opts) {
 
 // core/rubrics.ts
 var import_yaml = __toESM(require_dist(), 1);
+function lenientLine(v) {
+  if (typeof v === "number") return Number.isInteger(v) && v > 0 ? v : void 0;
+  if (typeof v !== "string") return void 0;
+  const m = v.trim().match(/^(?:L(\d+)(?:\s|$)|(\d+)$)/i);
+  const n = m ? Number(m[1] ?? m[2]) : NaN;
+  return Number.isInteger(n) && n > 0 ? n : void 0;
+}
 var criterionSchema = external_exports.object({
   id: external_exports.string().regex(/^[a-z0-9][a-z0-9_.-]*$/i),
   question: external_exports.string().min(5),
@@ -53827,7 +53834,7 @@ var rubricOutputSchema = external_exports.array(
     id: external_exports.string(),
     result: external_exports.union([external_exports.enum(["pass", "fail", "n/a"]), external_exports.coerce.number()]),
     justification: external_exports.string().default(""),
-    evidence: external_exports.object({ path: external_exports.string().default(""), line: external_exports.coerce.number().int().optional(), quote: external_exports.string().default("") }).optional()
+    evidence: external_exports.object({ path: external_exports.string().default(""), line: external_exports.unknown().transform(lenientLine).optional(), quote: external_exports.string().default("") }).optional()
   })
 ).max(50).default([]);
 var norm = (s) => s.replace(/\s+/g, " ").trim().toLowerCase();
@@ -55698,6 +55705,17 @@ function numberPatch(patch) {
     return `L${n++} ${line}`;
   }).join("\n");
 }
+function lineForQuote(quote, text3) {
+  const q2 = quote?.replace(/^L\d+\s/i, "").replace(/^[+ ]/, "").trim();
+  if (!q2 || q2.length < 4) return void 0;
+  let hit;
+  for (const [n, t] of text3) {
+    if (t.trim() !== q2) continue;
+    if (hit !== void 0) return void 0;
+    hit = n;
+  }
+  return hit;
+}
 var laneEnum = external_exports.enum(["auto", "review", "block"]);
 var triageOutputSchema = external_exports.object({
   summary: external_exports.string(),
@@ -55705,8 +55723,9 @@ var triageOutputSchema = external_exports.object({
     path: external_exports.string(),
     lane: laneEnum,
     reason: external_exports.string().default(""),
+    // Lenient like severity: models sometimes put the diff line itself in "line" ("L9 +code" or just the code).
     findings: external_exports.array(external_exports.object({
-      line: external_exports.coerce.number().int(),
+      line: external_exports.unknown().transform(lenientLine).optional(),
       quote: external_exports.string().optional(),
       message: external_exports.string(),
       suggestion: external_exports.string().optional(),
@@ -55828,11 +55847,13 @@ function validateAgainstFiles(out, files, criteria = [], suggestions) {
     if (!pf) continue;
     const valid = diffLines(pf.patch);
     const text3 = suggestions?.(f.path) ? newSideText(pf.patch) : void 0;
+    let sideText;
     for (const x of f.findings) {
       const message = x.message.trim().slice(0, 300);
       if (!message) continue;
       const quote = x.quote?.trim().slice(0, 200);
-      const line = valid.has(x.line) && quote && quoteInPatch(quote, pf.patch) ? x.line : void 0;
+      const at = x.line ?? lineForQuote(quote, sideText ??= newSideText(pf.patch));
+      const line = at !== void 0 && valid.has(at) && quote && quoteInPatch(quote, pf.patch) ? at : void 0;
       const key = `${f.path}:${line ?? "file"}:${message}`;
       if (seen.has(key)) continue;
       seen.add(key);

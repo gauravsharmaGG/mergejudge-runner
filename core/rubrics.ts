@@ -2,6 +2,20 @@ import { parse } from "yaml";
 import { z } from "zod";
 import type { Lane, PrFile } from "./types.js";
 
+/**
+ * A finding's "line" as a new-file line number, or undefined. Accepts a positive integer, a numeric string ("76") and
+ * the prompt's own prefix form ("L76" or "L76 +code"). Anything else (the model copying the code into "line") becomes
+ * undefined, so one bad field keeps the finding file-level instead of failing the whole reply as a parse error.
+ */
+export function lenientLine(v: unknown): number | undefined {
+  if (typeof v === "number") return Number.isInteger(v) && v > 0 ? v : undefined;
+  if (typeof v !== "string") return undefined;
+  // A bare number must be the whole value: "10 * x" is code, not line 10.
+  const m = v.trim().match(/^(?:L(\d+)(?:\s|$)|(\d+)$)/i);
+  const n = m ? Number(m[1] ?? m[2]) : NaN;
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
 export const criterionSchema = z.object({
   id: z.string().regex(/^[a-z0-9][a-z0-9_.-]*$/i),
   question: z.string().min(5),
@@ -98,7 +112,7 @@ export const rubricOutputSchema = z
       result: z.union([z.enum(["pass", "fail", "n/a"]), z.coerce.number()]),
       justification: z.string().default(""),
       evidence: z
-        .object({ path: z.string().default(""), line: z.coerce.number().int().optional(), quote: z.string().default("") })
+        .object({ path: z.string().default(""), line: z.unknown().transform(lenientLine).optional(), quote: z.string().default("") })
         .optional(),
     }),
   )
