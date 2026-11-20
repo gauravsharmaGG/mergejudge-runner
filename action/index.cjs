@@ -55562,6 +55562,14 @@ function codeAutoCandidates(files, cfg) {
 var codeAutoPrompt = (files, cfg) => codeAutoCandidates(files, cfg).size ? `
 
 ${CODE_AUTO_RULES}` : "";
+var WORKFLOW_FILE = /^\.github\/workflows\/.+\.ya?ml$/;
+var WORKFLOW_RULES = `Workflow checks; every finding needs a concrete fix.
+1. Concurrency: a fixed group with cancel-in-progress: false still lets a newer pending run replace an older one. To serialize and keep every run, add queue: max; name the group.
+2. Failure propagation: a fallible new step (upload-artifact, if-no-files-found: error) fails the job; later steps skip under the default success(), dependent jobs via if: success() or needs.<job>.result \u2014 name them. A later step reading local files (not the artifact) is independent: suggest continue-on-error: true and/or if: always(); keep jobs that must require success on needs.
+3. Stale text: unchanged echo, GITHUB_STEP_SUMMARY, log or step/job-name lines now wrong, even outside hunks. Anchor and quote the changed line that caused it; name the stale text and location; never quote beyond the diff.`;
+var workflowPrompt = (files) => files.some((f) => WORKFLOW_FILE.test(f.path) || (f.previousPath ? WORKFLOW_FILE.test(f.previousPath) : false)) ? `
+
+${WORKFLOW_RULES}` : "";
 var POLICY_DELIM = "repo_policy";
 var SUGGESTION_RULES = `Suggested changes: for a finding that has a "line" and a "quote", you may add an optional "suggestion" field to that finding: the exact replacement text for that one line (the line the quote is on), only when you are sure of a small, safe, local fix. It replaces just that single line; it may contain newlines if one line becomes several. Omit "suggestion" whenever the fix is not that simple. Never put code fences in it.`;
 var MAX_SUGGESTION_CHARS = 2e3;
@@ -55900,7 +55908,7 @@ function retryInstruction(truncated) {
 }
 async function runTriage(provider, input2, cfg, ctx = {}, log = () => {
 }, warn2 = log) {
-  const system = buildSystemPrompt(ctx) + codeAutoPrompt(input2.files, cfg) + (input2.context?.length ? `
+  const system = buildSystemPrompt(ctx) + codeAutoPrompt(input2.files, cfg) + workflowPrompt(input2.files) + (input2.context?.length ? `
 
 ${CONTEXT_RULES}` : "");
   const { prompt, diffTokens: diffOnly, contextTokens, trimmed } = buildUserPrompt(input2, cfg, system);
@@ -58529,7 +58537,7 @@ async function runDeepTriage(provider, input2, cfg, ctx = {}, opts, log = () => 
 }, warn2 = log) {
   const now = opts.now ?? Date.now;
   const started = now();
-  const system = buildSystemPrompt(ctx) + codeAutoPrompt(input2.files, cfg) + `
+  const system = buildSystemPrompt(ctx) + codeAutoPrompt(input2.files, cfg) + workflowPrompt(input2.files) + `
 
 ${deepRules(cfg, opts.tools)}`;
   const { prompt, diffTokens, trimmed } = buildUserPrompt({ ...input2, context: void 0 }, cfg, system);

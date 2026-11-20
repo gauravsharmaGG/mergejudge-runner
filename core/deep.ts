@@ -5,7 +5,7 @@ import { classifyLlmFailure, formatLlmFailure, LlmError } from "./llm/http.js";
 import type { ChatMessage, ChatTurn, LlmProvider, ToolCall, ToolDef } from "./llm/provider.js";
 import {
   buildSystemPrompt, buildUserPrompt, codeAutoPrompt, DELIM, estimateTokens, outputLimitWarning, parseTriageOutput, retryInstruction, sanitizeUntrusted, tokenBreakdown,
-  validateAgainstFiles, type PromptContext, type PromptInput, type TriageResult,
+  validateAgainstFiles, type PromptContext, type PromptInput, type TriageResult, workflowPrompt,
 } from "./triage.js";
 
 /** Read-only tools and the bounded tool loop for `review.mode: deep`. Final answer = the normal triage JSON. */
@@ -137,7 +137,7 @@ export async function runDeepTriage(
 ): Promise<TriageResult> {
   const now = opts.now ?? Date.now;
   const started = now();
-  const system = buildSystemPrompt(ctx) + codeAutoPrompt(input.files, cfg) + `\n\n${deepRules(cfg, opts.tools)}`;
+  const system = buildSystemPrompt(ctx) + codeAutoPrompt(input.files, cfg) + workflowPrompt(input.files) + `\n\n${deepRules(cfg, opts.tools)}`;
   const { prompt, diffTokens, trimmed } = buildUserPrompt({ ...input, context: undefined }, cfg, system);
   const messages: ChatMessage[] = [{ role: "user", content: prompt }];
   const skipped = ctx.skippedDiffFiles ?? [];
