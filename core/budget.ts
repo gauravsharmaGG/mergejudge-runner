@@ -13,7 +13,7 @@ export const REASONING_OUTPUT_TOKENS = 8000;
  * and the v4+ family (v4.x-flash and -pro reason by default); v2/v3 chat and deepseek-coder do not (v3.1 hybrids default to no thinking).
  */
 export const REASONING_MODEL =
-  /(?:^|[/:@])(?:glm-?(?:5|4\.[5-9])|gpt-5|o[1-9](?:-|$)|deepseek-(?:r1|reasoner|v(?:[4-9]|\d{2,}))|qwq|[^/]*thinking)/i;
+  /(?:^|[/:@])(?:glm-?(?:5|4\.[5-9])|gpt-5|o[1-9](?:-|$)|deepseek-(?:r1|reasoner|v(?:[4-9]|\d{2,}))|qwq|gemini-4|[^/]*thinking)/i;
 
 export const isReasoningModel = (model: string | undefined): boolean => !!model && REASONING_MODEL.test(model);
 

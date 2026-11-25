@@ -1,5 +1,6 @@
 import type { ProviderConfig } from "../config.js";
 import { AnthropicProvider } from "./anthropic.js";
+import { GeminiProvider, geminiThinkingLevel } from "./gemini.js";
 import { llmTransportFromConfig } from "./http.js";
 import { OpenAiProvider } from "./openai.js";
 import type { LlmProvider, LlmUsage } from "./provider.js";
@@ -26,6 +27,7 @@ export const DEFAULT_KEY_ENV: Record<string, string> = {
   openai: "OPENAI_API_KEY",
   "openai-compatible": "OPENAI_API_KEY",
   zai: "ZAI_API_KEY",
+  gemini: "GEMINI_API_KEY",
 };
 
 /** Secret / env var name the provider reads its key from: `provider.api_key_env`, else the type's default. */
@@ -37,6 +39,7 @@ export function providerKeyEnv(cfg: ProviderConfig): string {
 export function providerBaseUrl(cfg: ProviderConfig): string {
   if (cfg.base_url) return cfg.base_url;
   if (cfg.type === "anthropic") return "https://api.anthropic.com";
+  if (cfg.type === "gemini") return "https://generativelanguage.googleapis.com";
   if (cfg.type === "zai") return ZAI_ENDPOINTS[cfg.endpoint ?? "paygo"];
   return "https://api.openai.com/v1";
 }
@@ -44,7 +47,7 @@ export function providerBaseUrl(cfg: ProviderConfig): string {
 /** One metered model call: who was called (price-table provider key) and what the response said it used. `purpose` tells the PR story call from review calls (absent = review). */
 export interface LlmCallUsage { provider: string; model: string; usage: LlmUsage | null; purpose?: "review" | "story" }
 
-const OFFICIAL_HOSTS: Record<string, string> = { "api.anthropic.com": "anthropic", "api.openai.com": "openai" };
+const OFFICIAL_HOSTS: Record<string, string> = { "api.anthropic.com": "anthropic", "api.openai.com": "openai", "generativelanguage.googleapis.com": "gemini" };
 
 /**
  * Key of the provider in the price table. Only the official pay-as-you-go endpoints map to a priced provider
@@ -87,6 +90,8 @@ export function createProvider(
       return cfg.api === "responses"
         ? { provider: new OpenAiResponsesProvider(base, model, key, onUsage, transport) }
         : { provider: new OpenAiProvider(base, model, key, onUsage, transport) };
+    case "gemini":
+      return { provider: new GeminiProvider(base, model, key, geminiThinkingLevel({ model, thinking_level: cfg.thinking_level }), onUsage, transport) };
     case "openai-compatible":
     case "zai":
       return { provider: new OpenAiProvider(base, model, key, onUsage, transport) };

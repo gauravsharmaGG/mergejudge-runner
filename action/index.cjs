@@ -53908,13 +53908,15 @@ var DEFAULT_DIFF_EXCLUDE = [
   "**/*.generated.*"
 ];
 var DEFAULT_AUTO = ["docs/**", "**/*.md", "**/*.css", "public/**"];
-var PROVIDER_TYPES = ["openai-compatible", "openai", "anthropic", "zai", "workers-ai", "none"];
+var PROVIDER_TYPES = ["openai-compatible", "openai", "anthropic", "zai", "gemini", "workers-ai", "none"];
 var providerSchema = external_exports.object({
   type: external_exports.enum(PROVIDER_TYPES).default("none"),
   /** openai only: "chat" (Chat Completions, default) or "responses" (Responses API). */
   api: external_exports.enum(["chat", "responses"]).optional(),
   /** zai only: "paygo" (api.z.ai/api/paas/v4, default) or "coding" (coding-plan endpoint). */
   endpoint: external_exports.enum(["paygo", "coding"]).optional(),
+  /** gemini only: thinking level sent as generationConfig.thinkingConfig.thinkingLevel (default medium for gemini-4-neon). Ignored by other providers. */
+  thinking_level: external_exports.enum(["low", "medium", "high", "xhigh"]).optional(),
   base_url: external_exports.string().optional(),
   model: external_exports.string().optional(),
   api_key_env: external_exports.string().optional(),
@@ -55225,7 +55227,7 @@ function renderStorySection(story, animate = true, style = "svg", imageUrl, char
 // core/budget.ts
 var DEFAULT_OUTPUT_TOKENS = 2500;
 var REASONING_OUTPUT_TOKENS = 8e3;
-var REASONING_MODEL = /(?:^|[/:@])(?:glm-?(?:5|4\.[5-9])|gpt-5|o[1-9](?:-|$)|deepseek-(?:r1|reasoner|v(?:[4-9]|\d{2,}))|qwq|[^/]*thinking)/i;
+var REASONING_MODEL = /(?:^|[/:@])(?:glm-?(?:5|4\.[5-9])|gpt-5|o[1-9](?:-|$)|deepseek-(?:r1|reasoner|v(?:[4-9]|\d{2,}))|qwq|gemini-4|[^/]*thinking)/i;
 var isReasoningModel = (model) => !!model && REASONING_MODEL.test(model);
 var MIN_OUTPUT = 256;
 var MIN_INPUT = 1e3;
@@ -58875,6 +58877,69 @@ var AnthropicProvider = class {
   }
 };
 
+// core/llm/gemini.ts
+function geminiThinkingLevel(cfg) {
+  if (cfg.thinking_level) return cfg.thinking_level;
+  return cfg.model?.startsWith("gemini-4-neon") ? "medium" : void 0;
+}
+function geminiUsage(u) {
+  if (!u || typeof u !== "object") return null;
+  const prompt = tokenCount(u.promptTokenCount), cached2 = Math.min(prompt, tokenCount(u.cachedContentTokenCount));
+  return { input: prompt - cached2, output: tokenCount(u.candidatesTokenCount) + tokenCount(u.thoughtsTokenCount), cacheRead: cached2, cacheWrite: 0 };
+}
+var GeminiProvider = class {
+  constructor(baseUrl2, model, apiKey, thinkingLevel, onUsage, transport = {}) {
+    this.baseUrl = baseUrl2;
+    this.model = model;
+    this.apiKey = apiKey;
+    this.thinkingLevel = thinkingLevel;
+    this.onUsage = onUsage;
+    this.transport = transport;
+    this.label = model;
+    this.providerId = transport.providerId ?? "gemini";
+  }
+  baseUrl;
+  model;
+  apiKey;
+  thinkingLevel;
+  onUsage;
+  transport;
+  label;
+  providerId;
+  supportsTools = false;
+  url() {
+    return `${this.baseUrl.replace(/\/+$/, "")}/v1beta/models/${encodeURIComponent(this.model)}:generateContent`;
+  }
+  async complete(req) {
+    const r = await this.completeEx(req);
+    if (!r.text) throw new LlmError("parse", { provider: this.providerId });
+    return r.text;
+  }
+  async completeEx(req) {
+    const http = withCallBudget({ ...this.transport, providerId: this.providerId }, req.budgetMs, typeof req.maxRetries === "number" ? req.maxRetries : void 0);
+    const data = await postJson(
+      this.url(),
+      { "x-goog-api-key": this.apiKey },
+      {
+        systemInstruction: { parts: [{ text: req.system }] },
+        contents: [{ role: "user", parts: [{ text: req.user }] }],
+        generationConfig: {
+          maxOutputTokens: req.maxOutputTokens,
+          ...req.jsonMode || req.outputSchema ? { responseMimeType: "application/json" } : {},
+          ...this.thinkingLevel ? { thinkingConfig: { thinkingLevel: this.thinkingLevel.toUpperCase() } } : {}
+        }
+      },
+      http
+    );
+    const usage = geminiUsage(data.usageMetadata);
+    reportUsage(this.onUsage, usage, req.purpose);
+    const cand = data.candidates?.[0];
+    const text3 = (cand?.content?.parts ?? []).filter((p) => !p.thought && typeof p.text === "string").map((p) => p.text).join("");
+    const outputTokens = usage?.output ?? 0;
+    return { text: text3, truncated: isTruncated(cand?.finishReason === "MAX_TOKENS", outputTokens, req.maxOutputTokens), outputTokens, usage };
+  }
+};
+
 // core/llm/openai.ts
 function toOpenAiMessages(system, messages) {
   const out = [{ role: "system", content: system }];
@@ -59138,7 +59203,8 @@ var DEFAULT_KEY_ENV = {
   anthropic: "ANTHROPIC_API_KEY",
   openai: "OPENAI_API_KEY",
   "openai-compatible": "OPENAI_API_KEY",
-  zai: "ZAI_API_KEY"
+  zai: "ZAI_API_KEY",
+  gemini: "GEMINI_API_KEY"
 };
 function providerKeyEnv(cfg) {
   return cfg.api_key_env ?? DEFAULT_KEY_ENV[cfg.type] ?? "OPENAI_API_KEY";
@@ -59146,10 +59212,11 @@ function providerKeyEnv(cfg) {
 function providerBaseUrl(cfg) {
   if (cfg.base_url) return cfg.base_url;
   if (cfg.type === "anthropic") return "https://api.anthropic.com";
+  if (cfg.type === "gemini") return "https://generativelanguage.googleapis.com";
   if (cfg.type === "zai") return ZAI_ENDPOINTS[cfg.endpoint ?? "paygo"];
   return "https://api.openai.com/v1";
 }
-var OFFICIAL_HOSTS = { "api.anthropic.com": "anthropic", "api.openai.com": "openai" };
+var OFFICIAL_HOSTS = { "api.anthropic.com": "anthropic", "api.openai.com": "openai", "generativelanguage.googleapis.com": "gemini" };
 function priceProvider(cfg) {
   if (cfg.type === "workers-ai") return "workers-ai";
   if (cfg.type === "openai-compatible") return "openai-compatible";
@@ -59181,6 +59248,8 @@ function createProvider(cfg, env = process.env, bindings = {}) {
       return { provider: new AnthropicProvider(base, model, key, onUsage, transport) };
     case "openai":
       return cfg.api === "responses" ? { provider: new OpenAiResponsesProvider(base, model, key, onUsage, transport) } : { provider: new OpenAiProvider(base, model, key, onUsage, transport) };
+    case "gemini":
+      return { provider: new GeminiProvider(base, model, key, geminiThinkingLevel({ model, thinking_level: cfg.thinking_level }), onUsage, transport) };
     case "openai-compatible":
     case "zai":
       return { provider: new OpenAiProvider(base, model, key, onUsage, transport) };
