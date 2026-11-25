@@ -26,7 +26,7 @@ export const DEFAULT_DIFF_EXCLUDE = [
 export const DEFAULT_AUTO = ["docs/**", "**/*.md", "**/*.css", "public/**"];
 
 /** Every supported `provider.type`; createProvider (src/llm/index.ts) must handle each one (compile-checked). */
-export const PROVIDER_TYPES = ["openai-compatible", "openai", "anthropic", "zai", "workers-ai", "none"] as const;
+export const PROVIDER_TYPES = ["openai-compatible", "openai", "anthropic", "zai", "gemini", "workers-ai", "none"] as const;
 export type ProviderType = (typeof PROVIDER_TYPES)[number];
 
 const providerSchema = z
@@ -36,6 +36,8 @@ const providerSchema = z
     api: z.enum(["chat", "responses"]).optional(),
     /** zai only: "paygo" (api.z.ai/api/paas/v4, default) or "coding" (coding-plan endpoint). */
     endpoint: z.enum(["paygo", "coding"]).optional(),
+    /** gemini only: thinking level sent as generationConfig.thinkingConfig.thinkingLevel (default medium for gemini-4-neon). Ignored by other providers. */
+    thinking_level: z.enum(["low", "medium", "high", "xhigh"]).optional(),
     base_url: z.string().optional(),
     model: z.string().optional(),
     api_key_env: z.string().optional(),

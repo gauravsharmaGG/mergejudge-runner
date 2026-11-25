@@ -8,7 +8,7 @@ MergeJudge (`mergejudge-runner`) is a self-hostable, MIT-licensed GitHub Action 
 - **Rules before AI (deterministic risk floor):** Deterministic rules establish the minimum risk lane (`review` or `block`); the AI pass can raise risk when it verifies a defect, but cannot lower a deterministic floor.
 - **Two-pass adversarial verification:** Pass 1 proposes candidate defects with exact diff line quotes; Pass 2 independently attempts to falsify each candidate against the diff before any comment is posted, keeping precision at 75.9% (`--deep`) and 75.0% (default) on the 50-PR Martian Code-Review-Bench offline benchmark.
 - **Policy protected against the PR itself:** In GitHub Actions, `.mergejudge.yml` is read from the base branch (`pull_request.base.ref`, the ref GitHub exposes as `GITHUB_BASE_REF`) rather than the untrusted PR head, so an AI agent or contributor PR cannot weaken its own review gate.
-- **Bring your own model (BYOK):** Works with Anthropic (`claude-sonnet-4-20250514`), OpenAI (`gpt-4.1`, `gpt-4o`), Google Gemini, or any OpenAI-compatible / local Ollama endpoint. Gemini and Ollama use `provider: openai-compatible` with your `base_url`.
+- **Bring your own model (BYOK):** Works with Anthropic (`claude-sonnet-4-20250514`), OpenAI (`gpt-4.1`, `gpt-4o`), Google Gemini, or any OpenAI-compatible / local Ollama endpoint. Gemini has a native provider (`provider: gemini`, key `GEMINI_API_KEY`); Ollama uses `provider: openai-compatible` with your `base_url`.
 - **No API key required for rules-only mode:** Run deterministic, rules-only PR gating (`provider: none`, or without an LLM key) with zero external model API calls.
 
 Best for: engineering teams that want open-source AI code review for GitHub with explicit, auditable risk policies and a two-pass verification gate, not just another bot that writes noisy review comments.
@@ -50,6 +50,15 @@ provider:
   api_key_env: AI_API_KEY
 ai:
   mode: fast   # fast (default, one pass) | deep (two-pass verification)
+```
+
+Google Gemini (native provider; store your key as the secret `GEMINI_API_KEY`, or point `api_key_env` at another name):
+
+```yaml
+provider:
+  type: gemini
+  model: gemini-4-neon
+  thinking_level: medium   # low | medium | high | xhigh
 ```
 
 Store `AI_API_KEY` as a repository secret (Settings, Secrets and variables, Actions). It is your own Anthropic, OpenAI, Gemini, z.ai, or OpenAI-compatible key. MergeJudge does not issue keys. `api_key_env` is only the variable name, so an existing secret named `MJ_API_KEY` still works if you set `api_key_env: MJ_API_KEY`. For rules-only gating, set `provider: none` and omit the secret: zero calls to a model API. No `.mergejudge.yml` is required to start, because built-in defaults apply. The `@v1` tag is the major Action release. The 50-PR numbers below were measured with npm package `mergejudge-runner@0.6.1`.
@@ -210,10 +219,11 @@ No config file is required. Built-in defaults apply, and the file is read from t
 
 | Key | Role |
 |---|---|
-| `provider.type` | `anthropic`, `openai`, `zai`, `openai-compatible`, `workers-ai`, or `none` (rules-only, no model call). |
+| `provider.type` | `anthropic`, `openai`, `zai`, `gemini`, `openai-compatible`, `workers-ai`, or `none` (rules-only, no model call). |
 | `provider.model` | Model id from your provider. Examples: `claude-sonnet-4-20250514`, `gpt-4.1`, `gpt-4o`. |
-| `provider.base_url` | OpenAI-compatible host. Use this for Gemini's OpenAI-compatible endpoint or local Ollama (`http://127.0.0.1:11434/v1`). |
-| `provider.api_key_env` | Name of the env var that holds your key. Default depends on the provider (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `ZAI_API_KEY`). The variable must be non-empty or the review stays rules-only. |
+| `provider.thinking_level` | `gemini` only: `low`, `medium`, `high` or `xhigh`. Default `medium` for `gemini-4-neon` (the Gemini API itself defaults Neon to high); other Gemini models send no thinking setting unless you set it. Ignored by other providers. |
+| `provider.base_url` | Override the endpoint: an OpenAI-compatible host or local Ollama (`http://127.0.0.1:11434/v1`). |
+| `provider.api_key_env` | Name of the env var that holds your key. Default depends on the provider (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `ZAI_API_KEY`, `GEMINI_API_KEY`). The variable must be non-empty or the review stays rules-only. |
 | `lane_gate` | `enforce` (default), `observe`, or `off`. `enforce` is the behaviour described here: `block` fails the `mergejudge/lane` check and approvals/auto-merge follow the lane. `observe` is a good way to try MergeJudge on a repo first: comments and findings are posted, the check never fails (`block` and `review` conclude `neutral`, and the title says what the lane would have been), and no bot approval, auto-merge or dismissal happens. `off` posts only comments and findings; the check always passes, so a required check never hangs. The learning-branch block always fails the check. |
 | `ai.mode` | `fast` (default, one pass) or `deep` (second pass). Same switch as Action `review_mode`, `MERGEJUDGE_MODE`, and CLI `--deep`. |
 | `review.mode` | How much surrounding code is attached: `diff` (default), `context`, or `deep` (callers, imports, related files). This is not the pass count. |
@@ -329,7 +339,7 @@ mergejudge-runner run --concurrency 2 # capped by the concurrency registered wit
 - Per-job timeout 10 min (`--job-timeout-min`); on timeout the process tree is killed and the job is nacked.
 - Errors (bad engine output, crash, unsupported job) are **nacked** with a short reason; the server retries up to its limit.
 - Network errors, 5xx and 429 back off exponentially with jitter; `Retry-After` is honoured.
-- Token budget. `budget.max_tokens_per_pr` (default 40000) is one cap for the whole review, counted on the tokens the provider reports (else an estimate): the review call, its one JSON retry, the `ai.mode: deep` second pass and the PR story call. The first call may use what it needs; a retry, second pass or story call that would go past the cap is skipped and "Not checked" says so. When a big PR does not fit, every file keeps its header and the patches are shared out fairly (short ones whole, long ones cut at hunk boundaries and marked `[... truncated by MergeJudge ...]`); "Not checked" lists the trimmed files. Reasoning models (GLM 4.5+/5, GPT-5, o-series, DeepSeek R1 and v4+, `*thinking*`) get a larger default output limit; `budget.max_output_tokens` overrides it.
+- Token budget. `budget.max_tokens_per_pr` (default 40000) is one cap for the whole review, counted on the tokens the provider reports (else an estimate): the review call, its one JSON retry, the `ai.mode: deep` second pass and the PR story call. The first call may use what it needs; a retry, second pass or story call that would go past the cap is skipped and "Not checked" says so. When a big PR does not fit, every file keeps its header and the patches are shared out fairly (short ones whole, long ones cut at hunk boundaries and marked `[... truncated by MergeJudge ...]`); "Not checked" lists the trimmed files. Reasoning models (GLM 4.5+/5, GPT-5, Gemini 4, o-series, DeepSeek R1 and v4+, `*thinking*`) get a larger default output limit; `budget.max_output_tokens` overrides it.
 - Model calls (Action and API engines: OpenAI, Anthropic, z.ai, OpenAI-compatible, Workers AI) are bounded: 120 s per attempt (`provider.timeout_ms`, max 180 s), at most 1 retry after an attempt times out (`provider.max_timeout_retries`), up to 2 retries for network errors, HTTP 408, 429 and 5xx (`provider.max_retries`), and 240 s per call including retries and waits (`provider.budget_ms`, max 300 s). Env `MERGEJUDGE_LLM_TIMEOUT_MS`, `MERGEJUDGE_LLM_MAX_RETRIES`, `MERGEJUDGE_LLM_MAX_TIMEOUT_RETRIES`, `MERGEJUDGE_LLM_BUDGET_MS` and `MERGEJUDGE_LLM_MAX_DELAY_MS` override them. Deep mode stops tool use at `deep.max_seconds` and caps every model call so the whole loop ends within `deep.max_seconds` + 240 s (6 min by default, inside the 10-minute job). On failure the PR comment says only `AI review unavailable (<class>)`.
 - `SIGINT`/`SIGTERM`: stop polling, give in-flight jobs 30 s to finish, then kill the engine and nack them ("runner shutting down") and exit. A second signal exits immediately.
 - The access token is rotated through `/token/rotate` when it has < 14 days left (or when a response carries an `x-mergejudge-rotate` header). The new token is written to the config file (atomic rename) **before** it is used.
