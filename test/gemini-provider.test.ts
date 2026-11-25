@@ -39,15 +39,15 @@ describe("gemini request", () => {
   it("posts to generateContent with the key in a header only", async () => {
     const m = mock(ok);
     await make("gemini-4-neon", undefined, m).completeEx(req);
-    expect(m.calls[0].url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-4-neon:generateContent");
-    expect(m.calls[0].url).not.toContain(KEY);
-    expect(m.calls[0].headers["x-goog-api-key"]).toBe(KEY);
+    expect(m.calls[0]!.url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-4-neon:generateContent");
+    expect(m.calls[0]!.url).not.toContain(KEY);
+    expect(m.calls[0]!.headers["x-goog-api-key"]).toBe(KEY);
   });
   it("thinking level: medium default for neon, explicit high, absent otherwise", async () => {
     const level = async (model: string, thinking_level?: GeminiThinkingLevel) => {
       const m = mock(ok);
       await make(model, geminiThinkingLevel({ model, thinking_level }), m).completeEx(req);
-      return m.calls[0].body.generationConfig.thinkingConfig?.thinkingLevel;
+      return m.calls[0]!.body.generationConfig.thinkingConfig?.thinkingLevel;
     };
     expect(await level("gemini-4-neon")).toBe("MEDIUM");
     expect(await level("gemini-4-neon", "high")).toBe("HIGH");
@@ -56,10 +56,10 @@ describe("gemini request", () => {
   it("sends no sampling or budget fields and sets json mime type", async () => {
     const m = mock(ok);
     await make("gemini-4-neon", "medium", m).completeEx({ ...req, jsonMode: true });
-    const body = JSON.stringify(m.calls[0].body);
+    const body = JSON.stringify(m.calls[0]!.body);
     for (const k of ["temperature", "topP", "topK", "thinkingBudget", "MINIMAL"]) expect(body).not.toContain(k);
-    expect(m.calls[0].body.generationConfig.responseMimeType).toBe("application/json");
-    expect(m.calls[0].body.generationConfig.maxOutputTokens).toBe(1000);
+    expect(m.calls[0]!.body.generationConfig.responseMimeType).toBe("application/json");
+    expect(m.calls[0]!.body.generationConfig.maxOutputTokens).toBe(1000);
   });
 });
 
